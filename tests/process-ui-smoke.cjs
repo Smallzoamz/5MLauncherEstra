@@ -1,0 +1,54 @@
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright');
+const assert = require('node:assert/strict');
+(async()=>{
+  const browser=await chromium.launch({headless:true});
+  try {
+    const page=await browser.newPage({viewport:{width:1366,height:900}});
+    const errors=[];page.on('pageerror',e=>errors.push(e.message));
+    let running=true, cacheCalls=0;const launches=[];
+    await page.addInitScript(()=>localStorage.setItem('fivem_launcher_settings_v3',JSON.stringify({checkMicBeforeLaunch:false,autoClearCacheBeforeLaunch:true})));
+    await page.route('**/api/system-presence',r=>r.fulfill({json:{fivem:{running,error:running===null?'tasklist failed':null},steam:{running:true},discord:{running:true}}}));
+    await page.route('**/api/server-query?*',r=>r.fulfill({json:{online:true,status:'Online',clients:4,maxClients:80}}));
+    await page.route('**/api/installation?*',r=>r.fulfill({json:{success:true,exe:'C:/Fixture/FiveM.exe'}}));
+    await page.route('**/api/clean-cache',r=>{cacheCalls++;return r.fulfill({json:{success:true}});});
+    await page.route('**/api/launch-fivem',r=>{launches.push(r.request().postDataJSON());return r.fulfill({json:{success:true,message:'fixture launch sent'}});});
+    await page.goto(process.env.LAUNCHER_URL || 'http://127.0.0.1:5199');
+    const play=page.getByRole('button',{name:'กดเล่น',exact:true});
+    const cl2=page.getByRole('switch',{name:'เปิด FiveM ตัวที่สอง (Legacy)'});
+    await page.waitForFunction(()=>document.querySelector('#fivem-process-status')?.textContent.includes('กำลังทำงานอยู่'));
+    assert.equal(await play.isDisabled(),true);
+    await page.screenshot({path:'tests/artifacts/process-guard-running.png',fullPage:true});
+    await cl2.click();assert.equal(await play.isEnabled(),true);
+    await play.click();
+    await page.getByRole('status').filter({hasText:'fixture launch sent'}).waitFor();
+    await page.waitForFunction(()=>!document.querySelector('[aria-label="กดเล่น"]').disabled);
+    assert.equal(launches.length,1);assert.equal(launches[0].cl2,true);assert.equal(cacheCalls,0);
+    await cl2.click();assert.equal(await play.isDisabled(),true);
+    running=false;
+    // Verify periodic polling restores the button without a manual refresh.
+    await page.waitForFunction(()=>!document.querySelector('[aria-label="กดเล่น"]').disabled,null,{timeout:7000});
+    running=true;
+    await play.click();
+    await page.getByRole('alert').filter({hasText:'FiveM กำลังทำงานอยู่'}).waitFor();
+    assert.equal(launches.length,1);assert.equal(cacheCalls,0);
+    running=null;
+    await page.getByRole('button',{name:'ตรวจสถานะ FiveM อีกครั้ง'}).click();
+    await page.getByRole('status').filter({hasText:'ตรวจสอบสถานะ FiveM ไม่ได้'}).waitFor();
+    assert.equal(await play.isDisabled(),true);
+    await cl2.click();assert.equal(await play.isEnabled(),true);
+    await play.click();await page.waitForFunction(()=>!document.querySelector('[aria-label="กดเล่น"]').disabled);
+    assert.equal(launches.length,2);assert.equal(cacheCalls,0);
+    running=false;await page.getByRole('button',{name:'ตรวจสถานะ FiveM อีกครั้ง'}).click();
+    await page.getByRole('status').filter({hasText:'FiveM ยังไม่ได้เปิด'}).waitFor();
+    await cl2.click();await play.click();
+    await page.waitForFunction(()=>!document.querySelector('[aria-label="กดเล่น"]').disabled);
+    assert.equal(launches.length,3);assert.equal(launches[2].cl2,false);assert.equal(cacheCalls,1);
+    await page.setViewportSize({width:390,height:844});
+    running=true;await page.getByRole('button',{name:'ตรวจสถานะ FiveM อีกครั้ง'}).click();
+    await page.waitForFunction(()=>document.querySelector('[aria-label="กดเล่น"]').disabled);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    await page.screenshot({path:'tests/artifacts/process-guard-mobile.png',fullPage:true});
+    assert.deepEqual(errors,[]);
+    console.log(JSON.stringify({passed:true,checks:['running game blocks Play','CL2 permits launch and skips live cache','poll restores Play after exit','click preflight catches newly started game','unknown process state blocks normal launch','CL2 exception on unknown state','normal launch preserves auto cache','mobile layout'],launches:launches.length,cacheCalls,pageErrors:errors},null,2));
+  } finally {await browser.close();}
+})().catch(e=>{console.error(e);process.exit(1)});

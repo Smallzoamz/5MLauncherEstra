@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 650 180" fill="none">
+  <title>Estra FiveM Launcher</title>
+  <g transform="translate(0 9) scale(.62)">
+    <path d="M66 50H226L192 86H98L86 113H185L153 147H71L59 174H160L124 210H12L66 50Z" fill="#C9FBE8"/>
+    <path d="M207 112L244 75L213 163H173L207 112Z" fill="#7DE7C0"/>
+  </g>
+  <g transform="translate(198 32) skewX(-10) scale(.88)" fill="#F1FCF7" fill-rule="evenodd">
+    <path d="M0 0H70L59 18H20V39H58L47 57H20V82H70L59 100H0Z"/>
+    <path transform="translate(88)" d="M18 0H78L66 18H24V40H62L78 54V84L62 100H0L12 82H54V60H18L0 46V16Z"/>
+    <path transform="translate(184)" d="M0 0H88L76 20H54V100H32V20H0Z"/>
+    <path transform="translate(290)" d="M0 0H62L80 18V42L62 58H52L82 100H58L30 58H20V100H0ZM20 18V40H54L60 34V24L54 18Z"/>
+    <path transform="translate(390)" d="M34 0H60L94 100H72L64 76H28L20 100H0ZM34 58H58L46 22Z"/>
+  </g>
+  <text x="187" y="155" fill="#8FAEA1" font-family="Arial,sans-serif" font-size="17" letter-spacing="8">FIVEM LAUNCHER</text>
+</svg>

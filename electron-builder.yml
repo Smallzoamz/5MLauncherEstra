@@ -1,0 +1,45 @@
+appId: local.fivemlauncher.desktop
+productName: Estra FiveM Launcher
+copyright: Copyright © 2026 Estra FiveM Launcher contributors
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - desktop/main.cjs
+  - desktop/preload.cjs
+  - desktop/gameSession.cjs
+  - src/server/**/*
+  - src/shared/**/*
+  - build/icon.ico
+  - package.json
+asar: true
+asarUnpack:
+  - "**/*.node"
+npmRebuild: false
+extraFiles:
+  - from: build/THIRD-PARTY-NOTICES.txt
+    to: THIRD-PARTY-NOTICES.txt
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+  artifactName: Estra-FiveM-Launcher-Setup-${version}-${arch}.${ext}
+  requestedExecutionLevel: asInvoker
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Estra FiveM Launcher
+  uninstallDisplayName: Estra FiveM Launcher
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+  installerLanguages:
+    - en_US
+    - th_TH
+

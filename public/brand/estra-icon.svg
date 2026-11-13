@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <title>Estra FiveM Launcher</title>
+  <rect x="1" y="1" width="254" height="254" rx="57" fill="#0B1416"/>
+  <rect x="1.5" y="1.5" width="253" height="253" rx="56.5" stroke="#29413B"/>
+  <g transform="translate(22 19) scale(.83)">
+    <path d="M66 50H226L192 86H98L86 113H185L153 147H71L59 174H160L124 210H12L66 50Z" fill="#C9FBE8"/>
+    <path d="M207 112L244 75L213 163H173L207 112Z" fill="#7DE7C0"/>
+  </g>
+</svg>

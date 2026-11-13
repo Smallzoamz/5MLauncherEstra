@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.backups/
+tests/artifacts/
+
+release/
+.cache/
+.installer-qa/
+src-tauri/target/
+.tauri/
+artifacts/
+IMPLEMENTATION_PLAN.m/
