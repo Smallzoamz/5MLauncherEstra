@@ -1,5 +1,5 @@
 export const DEFAULT_GITHUB_REPO = 'Smallzoamz/5MLauncherEstra';
-export const APP_VERSION = '2.0.0';
+export const APP_VERSION = '2.0.1';
 
 export function isValidGithubRepo(value) {
   if (typeof value !== 'string') return false;

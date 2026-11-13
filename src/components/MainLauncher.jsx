@@ -63,7 +63,7 @@ export default function MainLauncher({ server, settings, backgroundKind, onUpdat
     </section>
     {server.queryError && <p className="query-note">{server.queryError}</p>}
     {error && <p role="alert" className="error-message">{error}</p>}
-    <div className="workspace-footer"><span className="local-note"><i /> ESTRA FIVEM LAUNCHER <span>/</span> v2.0.0 · RUST/TAURI</span><div className="workspace-footer-actions"><button className="quiet-button" disabled={busy} onClick={onOpenPatcher} aria-label="เปิด Patcher"><PackageCheck size={14} /> เปิด Patcher</button><button className="quiet-button" disabled={busy} onClick={onOpenCacheModal} aria-label="ล้างแคช"><Trash2 size={14} /> ล้างแคชเซิร์ฟเวอร์</button></div></div>
+    <div className="workspace-footer"><span className="local-note"><i /> ESTRA FIVEM LAUNCHER <span>/</span> v2.0.1 · RUST/TAURI</span><div className="workspace-footer-actions"><button className="quiet-button" disabled={busy} onClick={onOpenPatcher} aria-label="เปิด Patcher"><PackageCheck size={14} /> เปิด Patcher</button><button className="quiet-button" disabled={busy} onClick={onOpenCacheModal} aria-label="ล้างแคช"><Trash2 size={14} /> ล้างแคชเซิร์ฟเวอร์</button></div></div>
     <details id="server-config" className="configuration-panel"><summary><SlidersHorizontal size={16} /><span>ตั้งค่ารายละเอียดเมือง</span><ChevronDown size={16} /></summary>
     <div className="form-grid">
       <div className="form-row-2col">

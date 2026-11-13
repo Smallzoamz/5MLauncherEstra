@@ -23,7 +23,7 @@ export default function WindowMenu() {
       <button onClick={() => act('hideToTray')}><Minus size={16} />ซ่อนลง System Tray</button>
       <button onClick={() => act('toggleMaximize')}><Maximize2 size={16} />ขยาย / คืนขนาดหน้าต่าง</button>
       <button className="window-close" onClick={() => act('close')}><Power size={16} />ปิดโปรแกรม</button>
-      <small>ESTRA FIVEM LAUNCHER · 2.0.0</small>
+      <small>ESTRA FIVEM LAUNCHER · 2.0.1</small>
     </div>
   </details>;
 }
