@@ -171,3 +171,43 @@ button:active:not(:disabled){transform:scale(.97)}
   .patcher-summary-card { flex-direction:column; align-items:flex-start; }
   .patcher-tabs { padding:10px 17px; }
 }
+.desktop-app .prelaunch-patcher { min-height:100vh; }
+.prelaunch-patcher { min-height:750px; display:flex; flex-direction:column; justify-content:space-between; position:relative; z-index:1; background:linear-gradient(180deg, rgba(8,10,12,.64) 0%, rgba(8,10,12,.84) 55%, rgba(8,10,12,.96) 100%); }
+.prelaunch-topbar { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.prelaunch-brand { display:flex; align-items:center; gap:12px; }
+.prelaunch-brand img { height:24px; width:auto; display:block; }
+.prelaunch-badge { font-size:10px; letter-spacing:1.3px; font-weight:700; color:#b8d7ca; background:#111d1a; border:1px solid #a8d4c026; border-radius:999px; padding:4px 10px; }
+.prelaunch-top-actions { display:flex; align-items:center; gap:10px; }
+.prelaunch-link-btn { display:inline-flex; align-items:center; gap:7px; padding:7px 12px; border-radius:10px; border:1px solid #ffffff16; background:#0d1415cc; color:#c8ddd4; font-size:11px; }
+.prelaunch-link-btn:hover:not(:disabled) { background:#182722; color:#eef9f4; }
+.prelaunch-stage { flex:1; display:flex; flex-direction:column; justify-content:flex-end; gap:30px; padding:32px 44px 36px; }
+.prelaunch-hero { max-width:820px; display:flex; flex-direction:column; gap:14px; animation:copy-in .45s var(--ease-out) both; }
+.prelaunch-target-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.prelaunch-avatar { width:38px; height:38px; }
+.prelaunch-city-label { display:block; font-size:14px; font-weight:700; margin-top:2px; }
+.prelaunch-repo-chip { margin-left:auto; padding:5px 11px; border-radius:999px; background:#101718; border:1px solid #ffffff12; font-size:11px; color:#9eb9ad; }
+.prelaunch-title { font-size:clamp(26px, 3.2vw, 42px); letter-spacing:-0.5px; line-height:1.22; text-transform:none; font-weight:800; color:#f4f8f6; }
+.prelaunch-subtitle { font-size:13px; color:#b7c3bf; line-height:1.65; max-width:680px; }
+.prelaunch-steps { display:flex; gap:9px; flex-wrap:wrap; margin-top:2px; }
+.prelaunch-step { display:inline-flex; align-items:center; gap:6px; padding:6px 11px; border-radius:999px; font-size:11px; background:#101516cc; border:1px solid #ffffff0e; color:#7e8a86; }
+.prelaunch-step.done { color:#bfe8d2; border-color:#6ea88b33; background:#13221ccc; }
+.prelaunch-step.active { color:#f3f8f6; border-color:#bfe8d255; background:#192c25; }
+.prelaunch-notes-card { background:#0d1213e0; border:1px solid #ffffff10; border-radius:14px; padding:14px 16px; max-height:150px; overflow:auto; }
+.prelaunch-notes-card pre { margin-top:6px; font-family:var(--font-main); font-size:12px; line-height:1.65; color:#d3ddd9; white-space:pre-wrap; overflow-wrap:anywhere; }
+.prelaunch-alert { margin-top:0; max-width:680px; }
+.prelaunch-dock { background:#0b0f10eb; border:1px solid #c6e2d51f; border-radius:18px; padding:20px 22px; box-shadow:0 22px 60px #00000075; display:flex; flex-direction:column; gap:13px; }
+.prelaunch-meter-head { display:flex; align-items:baseline; justify-content:space-between; gap:14px; }
+.prelaunch-meter-meta { min-width:0; flex:1; }
+.prelaunch-status-label { font-size:12px; color:#cfe0d9; overflow-wrap:anywhere; }
+.prelaunch-percent { font-size:28px; font-weight:800; letter-spacing:-0.5px; font-variant-numeric:tabular-nums; color:#e5f5ee; flex-shrink:0; }
+.prelaunch-bar-track { height:11px; border-radius:999px; background:#171f21; border:1px solid #ffffff0a; overflow:hidden; position:relative; }
+.prelaunch-bar-fill { height:100%; border-radius:999px; background:linear-gradient(90deg, #79b89f 0%, #bfe8d2 65%, #e7faf0 100%); transition:width .22s var(--ease-out); }
+.prelaunch-bar-fill.active { box-shadow:0 0 18px #9ad6bd4d; }
+.prelaunch-bar-fill.error { background:linear-gradient(90deg, #b86a66, #e59e9b); }
+.prelaunch-dock-actions { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding-top:4px; }
+.prelaunch-dock-left, .prelaunch-dock-right { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+@media (max-width:720px) {
+  .prelaunch-stage { padding:22px 20px 24px; gap:20px; }
+  .prelaunch-repo-chip { margin-left:0; }
+  .prelaunch-dock { padding:16px; }
+}

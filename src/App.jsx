@@ -17,6 +17,7 @@ import presenceService from './services/presenceService';
 import { prepareLaunch } from './services/prepareLaunch';
 import { createLaunchHistory, latestHistoryCity } from './services/launchHistory';
 import LaunchHistory from './components/LaunchHistory';
+import PrelaunchPatcher from './components/PrelaunchPatcher';
 import { checkLauncherUpdate } from './services/patcherService';
 import { isConfiguredGithubRepo } from './shared/patcherConfig';
 
@@ -50,12 +51,13 @@ export default function App() {
   const launchLock = useRef(false);
   const [launchFeedback, setLaunchFeedback] = useState(null);
   const [launcherUpdate, setLauncherUpdate] = useState(null);
+  const [showPatcherScreen, setShowPatcherScreen] = useState(true);
   useEffect(() => {
-    if (!isConfiguredGithubRepo(settings.githubRepo)) return;
+    if (showPatcherScreen || !isConfiguredGithubRepo(settings.githubRepo)) return;
     let active = true;
     void checkLauncherUpdate(settings.githubRepo).then(info => { if (active) setLauncherUpdate(info); }).catch(() => {});
     return () => { active = false; };
-  }, [settings.githubRepo]);
+  }, [settings.githubRepo, showPatcherScreen]);
   useEffect(() => historyStore.subscribe(setHistory), [historyStore]);
   const launchCity = async city => {
     if (launchLock.current || settingsBusy) return;
@@ -79,11 +81,11 @@ export default function App() {
   };
   const latestCity = latestHistoryCity(history.entries, servers);
   const launchLatestRef = useRef(null);
-  launchLatestRef.current = () => { if (latestCity && !modal && !settingsBusy) { setActiveId(latestCity.id); void launchCity(latestCity); } };
+  launchLatestRef.current = () => { if (latestCity && !modal && !settingsBusy && !showPatcherScreen) { setActiveId(latestCity.id); void launchCity(latestCity); } };
   useEffect(() => window.estraWindow?.onLaunchLatest(() => launchLatestRef.current?.()), []);
   useEffect(() => {
-    window.estraWindow?.setLatestCity({ name: latestCity?.name || '', enabled: !!latestCity && !launchBusy && !modal && !settingsBusy });
-  }, [latestCity?.id, latestCity?.name, launchBusy, modal, settingsBusy]);
+    window.estraWindow?.setLatestCity({ name: latestCity?.name || '', enabled: !!latestCity && !launchBusy && !modal && !settingsBusy && !showPatcherScreen });
+  }, [latestCity?.id, latestCity?.name, launchBusy, modal, settingsBusy, showPatcherScreen]);
   useEffect(() => window.estraWindow?.onGameStatus(setGameNotice), []);
   const active = servers.find(s => s.id === activeId) || servers[0];
   const activeRef = useRef(active); activeRef.current = active;
@@ -122,29 +124,41 @@ export default function App() {
   return <div className={`launcher-window${modalClosing ? ' modal-closing' : ''}`}>
     <CityBackground server={active} onStatus={setBackground} />
     {storageError && <p role="alert" className="error-message">{storageError}</p>}
-    <div className="launcher-body">
-      <ServerSidebar servers={servers} activeServerId={active?.id} onSelectServer={setActiveId}
-        onRemoveServer={id => { setServers(prev => prev.filter(s => s.id !== id)); if (active?.id === id) setActiveId(''); }}
-        onOpenNewServerModal={() => setModal('new')} onOpenLibrary={() => setModal('library')} onOpenHistory={() => setModal('history')} onOpenSettings={() => setModal('settings')} onOpenMicTest={() => setModal('mic')} onOpenPatcher={() => setModal('patcher')} hasLauncherUpdate={!!launcherUpdate?.available} />
-      <div className="launcher-main"><div className="header-wrap" data-tauri-drag-region><Header onOpenLibrary={() => setModal('library')} onOpenPatcher={() => setModal('patcher')} hasLauncherUpdate={!!launcherUpdate?.available} /></div>
-        {launcherUpdate?.available && <p className="notice" role="status">มี Estra Launcher เวอร์ชันใหม่ v{launcherUpdate.version} พร้อมอัปเดต — <button type="button" className="btn-inline-orange" onClick={() => setModal('patcher')}>เปิด Patcher</button></p>}
-        {gameNotice && ['closed', 'startup-timeout', 'detection-error'].includes(gameNotice.state) && <p className="notice" role="status">{gameNotice.message}</p>}
-        {launchFeedback?.error && <p className="error-message" role="alert">{launchFeedback.error}</p>}
-        {launchFeedback?.message && <p className="notice" role="status">{launchFeedback.message}</p>}
-        {history.error && <p className="error-message" role="alert">{history.error}</p>}
-        <MainLauncher key={active?.id || 'empty'} server={active} settings={settings} onUpdateServer={update} backgroundKind={background.owner === `${active?.id || ''}|${active?.ip || ''}` ? background.kind : 'loading'}
-          busy={launchBusy || settingsBusy} onLaunch={launchCity}
-          onRefresh={() => setRefreshKey(k => k + 1)} isRefreshing={refreshing}
-          onOpenNewServerModal={() => setModal('new')} onOpenSettings={() => setModal('settings')}
-          onOpenCacheModal={() => setModal('cache')} onOpenMicTest={() => setModal('mic')} onOpenPatcher={() => setModal('patcher')} />
+    {showPatcherScreen ? (
+      <PrelaunchPatcher
+        activeServer={active}
+        settings={settings}
+        launcherUpdate={launcherUpdate}
+        onLauncherUpdateChange={setLauncherUpdate}
+        onOpenPatcherSettings={() => setModal('patcher')}
+        onEnterLauncher={() => setShowPatcherScreen(false)}
+        paused={modal !== null}
+      />
+    ) : (
+      <div className="launcher-body">
+        <ServerSidebar servers={servers} activeServerId={active?.id} onSelectServer={setActiveId}
+          onRemoveServer={id => { setServers(prev => prev.filter(s => s.id !== id)); if (active?.id === id) setActiveId(''); }}
+          onOpenNewServerModal={() => setModal('new')} onOpenLibrary={() => setModal('library')} onOpenHistory={() => setModal('history')} onOpenSettings={() => setModal('settings')} onOpenMicTest={() => setModal('mic')} onOpenPatcher={() => setModal('patcher')} hasLauncherUpdate={!!launcherUpdate?.available} />
+        <div className="launcher-main"><div className="header-wrap" data-tauri-drag-region><Header onOpenLibrary={() => setModal('library')} onOpenPatcher={() => setModal('patcher')} hasLauncherUpdate={!!launcherUpdate?.available} /></div>
+          {launcherUpdate?.available && <p className="notice" role="status">มี Estra Launcher เวอร์ชันใหม่ v{launcherUpdate.version} พร้อมอัปเดต — <button type="button" className="btn-inline-orange" onClick={() => setModal('patcher')}>เปิด Patcher</button></p>}
+          {gameNotice && ['closed', 'startup-timeout', 'detection-error'].includes(gameNotice.state) && <p className="notice" role="status">{gameNotice.message}</p>}
+          {launchFeedback?.error && <p className="error-message" role="alert">{launchFeedback.error}</p>}
+          {launchFeedback?.message && <p className="notice" role="status">{launchFeedback.message}</p>}
+          {history.error && <p className="error-message" role="alert">{history.error}</p>}
+          <MainLauncher key={active?.id || 'empty'} server={active} settings={settings} onUpdateServer={update} backgroundKind={background.owner === `${active?.id || ''}|${active?.ip || ''}` ? background.kind : 'loading'}
+            busy={launchBusy || settingsBusy} onLaunch={launchCity}
+            onRefresh={() => setRefreshKey(k => k + 1)} isRefreshing={refreshing}
+            onOpenNewServerModal={() => setModal('new')} onOpenSettings={() => setModal('settings')}
+            onOpenCacheModal={() => setModal('cache')} onOpenMicTest={() => setModal('mic')} onOpenPatcher={() => setModal('patcher')} />
+        </div>
       </div>
-    </div>
+    )}
     {modal === 'library' && <ServerLibrary servers={servers} activeId={active?.id} onClose={() => setModal(null)} onAdd={() => setModal('new')} onSelect={id => { setActiveId(id); setModal(null); }} onRemove={id => { setServers(prev => prev.filter(s => s.id !== id)); if (active?.id === id) setActiveId(''); }} />}
     {modal === 'history' && <LaunchHistory history={history} servers={servers} busy={launchBusy} onLaunch={city => { setActiveId(city.id); void launchCity(city); }} onClear={() => historyStore.clear()} onClose={() => setModal(null)} />}
     <MicTestModal isOpen={modal === 'mic'} onClose={() => setModal(null)} settings={settings} onSaveSettings={savePrefs} />
     <CacheModal isOpen={modal === 'cache'} onClose={() => setModal(null)} settings={settings} />
     <SettingsModal isOpen={modal === 'settings'} onClose={() => setModal(null)} settings={settings} onSaveSettings={savePrefs} activeServer={active} onMaintenanceBusy={setSettingsBusy} />
-    <PatcherModal isOpen={modal === 'patcher'} onClose={() => setModal(null)} activeServer={active} settings={settings} onSaveSettings={savePrefs} onUpdateServer={update} launcherUpdate={launcherUpdate} onLauncherUpdateChange={setLauncherUpdate} onBusyChange={setSettingsBusy} />
+    <PatcherModal isOpen={modal === 'patcher'} onClose={() => setModal(null)} activeServer={active} settings={settings} onSaveSettings={savePrefs} onUpdateServer={update} launcherUpdate={launcherUpdate} onLauncherUpdateChange={setLauncherUpdate} onBusyChange={setSettingsBusy} onOpenFullPatcher={showPatcherScreen ? null : () => setShowPatcherScreen(true)} />
     <NewServerModal isOpen={modal === 'new'} onClose={() => setModal(null)} onAddServer={server => { setServers(prev => [server, ...prev]); setActiveId(server.id); }} />
   </div>;
 }

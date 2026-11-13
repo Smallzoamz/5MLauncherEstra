@@ -37,7 +37,8 @@ export default function PatcherModal({
   onUpdateServer,
   launcherUpdate,
   onLauncherUpdateChange,
-  onBusyChange
+  onBusyChange,
+  onOpenFullPatcher
 }) {
   const [tab, setTab] = useState('city');
   const [manifestDraft, setManifestDraft] = useState('');
@@ -216,7 +217,14 @@ export default function PatcherModal({
             <PackageCheck size={19} />
             <span>Patcher &amp; GitHub Updates</span>
           </div>
-          <button className="modal-close-btn" disabled={busy} onClick={onClose} aria-label="ปิด">✕</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {onOpenFullPatcher && (
+              <button type="button" className="btn-inline-orange" disabled={busy} onClick={() => { onClose(); onOpenFullPatcher(); }}>
+                เปิดหน้า Patcher เต็มจอ
+              </button>
+            )}
+            <button className="modal-close-btn" disabled={busy} onClick={onClose} aria-label="ปิด">✕</button>
+          </div>
         </div>
 
         <div className="patcher-tabs" role="tablist" aria-label="โหมด Patcher">
