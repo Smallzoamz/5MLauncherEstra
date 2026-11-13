@@ -11,6 +11,7 @@
     "test": "node --test tests/*.test.js",
     "test:runtime": "node tests/runtime-smoke.mjs",
     "test:ui": "node tests/ui-audit.cjs && node tests/ui-success.cjs",
+    "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "desktop": "tauri dev",
