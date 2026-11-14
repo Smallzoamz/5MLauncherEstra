@@ -5,6 +5,7 @@ pub mod patcher;
 pub mod player_name;
 pub mod presence;
 pub mod session;
+pub mod social;
 
 use crate::fivem::{
     execute_real_clean_cache, query_live_server, resolve_installation, CleanCacheResult,
@@ -20,6 +21,7 @@ use crate::patcher::{
 };
 use crate::presence::{get_system_presence, SystemPresence};
 use crate::session::GameSessionMonitor;
+use crate::social::{social_request, SocialState};
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use tauri::menu::{MenuBuilder, MenuItem, MenuItemBuilder};
@@ -33,6 +35,7 @@ pub struct AppState {
     pub patch_cancel: PatchCancelFlag,
     pub tray_launch_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     pub latest_city_enabled: Mutex<bool>,
+    pub social: SocialState,
 }
 
 impl Default for AppState {
@@ -43,6 +46,7 @@ impl Default for AppState {
             patch_cancel: PatchCancelFlag::default(),
             tray_launch_item: Mutex::new(None),
             latest_city_enabled: Mutex::new(false),
+            social: SocialState::default(),
         }
     }
 }
@@ -236,6 +240,17 @@ fn window_close_cmd(app: AppHandle) {
     app.exit(0);
 }
 
+#[tauri::command]
+async fn social_request_cmd(
+    state: State<'_, AppState>,
+    method: String,
+    path: String,
+    body: Option<serde_json::Value>,
+    social_server_url: Option<String>,
+) -> Result<serde_json::Value, String> {
+    social_request(&state.social, method, path, body, social_server_url).await
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
@@ -337,6 +352,7 @@ pub fn run() {
             window_hide_cmd,
             window_toggle_maximize_cmd,
             window_close_cmd,
+            social_request_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Estra FiveM Launcher");

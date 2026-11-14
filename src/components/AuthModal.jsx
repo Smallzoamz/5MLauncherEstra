@@ -1,0 +1,379 @@
+import React, { useEffect, useState } from 'react';
+import {
+  Check,
+  Copy,
+  Globe,
+  LogIn,
+  LogOut,
+  ShieldCheck,
+  UserPlus,
+  X
+} from 'lucide-react';
+import {
+  LOCAL_SOCIAL_SENTINEL,
+  SUPABASE_SOCIAL_GATEWAY_URL,
+  isSupabaseGatewayUrl,
+  resolveSocialServerUrl
+} from '../shared/supabaseConfig';
+
+const STATUS_OPTIONS = [
+  { value: 'online', label: 'ออนไลน์ (Online)', dotClass: 'online', hint: 'แสดงสถานะออนไลน์และเมืองที่กำลังเล่นให้เพื่อนเห็น' },
+  { value: 'away', label: 'ไม่อยู่ชั่วคราว (Away)', dotClass: 'away', hint: 'แจ้งเพื่อนว่าเปิดลันเชอร์ไว้แต่ไม่อยู่หน้าจอ' },
+  { value: 'invisible', label: 'ซ่อนตัว (Invisible)', dotClass: 'offline', hint: 'ใช้งานได้ตามปกติ แต่เพื่อนจะเห็นคุณเป็นออฟไลน์' },
+  { value: 'offline', label: 'ออฟไลน์ (Offline)', dotClass: 'offline', hint: 'ตัดสถานะออนไลน์ชั่วคราว' }
+];
+
+export default function AuthModal({
+  isOpen,
+  initialMode = 'login',
+  onClose,
+  social,
+  settings,
+  onSaveSettings,
+  onLogin,
+  onRegister,
+  onLogout,
+  onChangeStatus
+}) {
+  const [mode, setMode] = useState(initialMode);
+  const [username, setUsername] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [serverDraft, setServerDraft] = useState(settings?.socialServerUrl || '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [copiedCode, setCopiedCode] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setMode(initialMode);
+    setError('');
+    setPassword('');
+    setConfirmPassword('');
+    setServerDraft(settings?.socialServerUrl || '');
+    setCopiedCode(false);
+  }, [isOpen, initialMode, settings?.socialServerUrl]);
+
+  if (!isOpen) return null;
+
+  const user = social?.authenticated ? social.user : null;
+
+  const handleSubmit = async e => {
+    e.preventDefault();
+    setError('');
+    if (mode === 'register' && password !== confirmPassword) {
+      setError('รหัสผ่านทั้งสองช่องไม่ตรงกัน');
+      return;
+    }
+    setBusy(true);
+    try {
+      if (mode === 'register') {
+        await onRegister({ username, displayName, password });
+      } else {
+        await onLogin({ username, password });
+      }
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSaveServerUrl = () => {
+    const clean = serverDraft.trim();
+    if (clean && clean.toLowerCase() !== LOCAL_SOCIAL_SENTINEL) {
+      try {
+        const u = new URL(clean);
+        if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password) {
+          setError('URL ของ Social Server ต้องขึ้นต้นด้วย http:// หรือ https:// และไม่มีข้อมูลล็อกอินใน URL');
+          return;
+        }
+      } catch {
+        setError('รูปแบบ URL ของ Social Server ไม่ถูกต้อง (หรือพิมพ์ local เพื่อใช้ในเครื่อง)');
+        return;
+      }
+    }
+    setError('');
+    onSaveSettings({
+      ...settings,
+      socialServerUrl: clean.toLowerCase() === LOCAL_SOCIAL_SENTINEL ? LOCAL_SOCIAL_SENTINEL : (clean || LOCAL_SOCIAL_SENTINEL)
+    });
+  };
+
+  const copyFriendCode = async () => {
+    if (!user?.friendCode) return;
+    try {
+      await navigator.clipboard.writeText(user.friendCode);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 1800);
+    } catch {
+      setError('คัดลอกรหัสเพื่อนไม่สำเร็จ');
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={() => !busy && onClose()}>
+      <section
+        className="modal-dialog auth-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={user ? 'บัญชี Estra และสถานะออนไลน์' : 'เข้าสู่ระบบหรือสมัครสมาชิก Estra'}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="modal-header">
+          <div>
+            <span className="eyebrow">ESTRA ACCOUNT &amp; SOCIAL</span>
+            <h2>{user ? 'บัญชีและความเป็นส่วนตัว' : mode === 'register' ? 'สมัครบัญชี Estra' : 'เข้าสู่ระบบ Estra'}</h2>
+          </div>
+          <button className="modal-close-btn" disabled={busy} onClick={onClose} aria-label="ปิด">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="modal-body">
+          {user ? (
+            <>
+              <div className="account-profile-card">
+                <div className="account-profile-avatar" style={{ background: user.avatarColor || '#2b6bf3' }}>
+                  {user.displayName.slice(0, 2).toUpperCase()}
+                  <span className={`presence-dot ${user.presence}`} />
+                </div>
+                <div className="account-profile-meta">
+                  <strong>{user.displayName}</strong>
+                  <small>
+                    @{user.username} · {social.mode === 'supabase' ? 'Estra Online (Supabase Realtime)' : social.mode === 'remote-social' ? 'Remote Social Server' : 'Local Social Engine'}
+                  </small>
+                </div>
+                <button type="button" className="friend-code-chip" onClick={copyFriendCode} title="คัดลอกรหัสเพื่อน">
+                  <span>{user.friendCode}</span>
+                  {copiedCode ? <Check size={13} /> : <Copy size={13} />}
+                </button>
+              </div>
+
+              <div>
+                <span className="field-label">สถานะออนไลน์แบบ Steam</span>
+                <div className="status-choice-list">
+                  {STATUS_OPTIONS.map(opt => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      disabled={busy}
+                      className={`status-choice-btn${user.statusPref === opt.value ? ' active' : ''}`}
+                      onClick={async () => {
+                        setBusy(true);
+                        setError('');
+                        try {
+                          await onChangeStatus(opt.value);
+                        } catch (err) {
+                          setError(err.message);
+                        } finally {
+                          setBusy(false);
+                        }
+                      }}
+                    >
+                      <span className={`presence-dot ${opt.dotClass}`} />
+                      <span>
+                        <strong>{opt.label}</strong>
+                        <small>{opt.hint}</small>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="social-server-box">
+                <label className="field-label" htmlFor="auth-social-server">
+                  <Globe size={13} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+                  Social Server URL ({isSupabaseGatewayUrl(resolveSocialServerUrl(settings?.socialServerUrl)) ? 'ออนไลน์ 100% · Supabase Cloud' : 'โหมดในเครื่อง / กำหนดเอง'})
+                </label>
+                <div className="input-container">
+                  <input
+                    id="auth-social-server"
+                    type="text"
+                    value={serverDraft}
+                    onChange={e => setServerDraft(e.target.value)}
+                    placeholder="https://... หรือพิมพ์ local เพื่อใช้ในเครื่อง"
+                  />
+                  <button type="button" className="btn-inline-orange" onClick={handleSaveServerUrl}>
+                    บันทึก URL
+                  </button>
+                </div>
+              </div>
+
+              {error && <p role="alert" className="error-message">{error}</p>}
+
+              <div className="settings-actions">
+                <button
+                  type="button"
+                  className="btn-action-cache"
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      await onLogout();
+                      onClose();
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  <LogOut size={15} /> ออกจากระบบ
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="auth-mode-tabs" role="tablist">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === 'login'}
+                  className={`filter-tab${mode === 'login' ? ' active' : ''}`}
+                  onClick={() => { setMode('login'); setError(''); }}
+                >
+                  <LogIn size={14} /> เข้าสู่ระบบ
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === 'register'}
+                  className={`filter-tab${mode === 'register' ? ' active' : ''}`}
+                  onClick={() => { setMode('register'); setError(''); }}
+                >
+                  <UserPlus size={14} /> สมัครสมาชิก
+                </button>
+              </div>
+
+              <form className="auth-form" onSubmit={handleSubmit}>
+                <div>
+                  <label className="field-label" htmlFor="auth-username">ชื่อผู้ใช้ (Username)</label>
+                  <div className="input-container">
+                    <input
+                      id="auth-username"
+                      autoFocus
+                      required
+                      minLength={3}
+                      maxLength={24}
+                      value={username}
+                      onChange={e => setUsername(e.target.value)}
+                      placeholder="เช่น sora_rp (a-z, 0-9, _)"
+                    />
+                  </div>
+                </div>
+
+                {mode === 'register' && (
+                  <div>
+                    <label className="field-label" htmlFor="auth-displayname">ชื่อที่แสดงให้เพื่อนเห็น</label>
+                    <div className="input-container">
+                      <input
+                        id="auth-displayname"
+                        maxLength={40}
+                        value={displayName}
+                        onChange={e => setDisplayName(e.target.value)}
+                        placeholder="เช่น Sora Kitagawa"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <label className="field-label" htmlFor="auth-password">รหัสผ่าน</label>
+                  <div className="input-container">
+                    <input
+                      id="auth-password"
+                      type="password"
+                      required
+                      minLength={6}
+                      maxLength={128}
+                      value={password}
+                      onChange={e => setPassword(e.target.value)}
+                      placeholder="อย่างน้อย 6 ตัวอักษร"
+                    />
+                  </div>
+                </div>
+
+                {mode === 'register' && (
+                  <div>
+                    <label className="field-label" htmlFor="auth-confirm-password">ยืนยันรหัสผ่าน</label>
+                    <div className="input-container">
+                      <input
+                        id="auth-confirm-password"
+                        type="password"
+                        required
+                        minLength={6}
+                        maxLength={128}
+                        value={confirmPassword}
+                        onChange={e => setConfirmPassword(e.target.value)}
+                        placeholder="กรอกรหัสผ่านอีกครั้ง"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {error && <p role="alert" className="error-message">{error}</p>}
+
+                <button type="submit" className="btn-action-play auth-submit-btn" disabled={busy}>
+                  {busy ? 'กำลังดำเนินการ…' : mode === 'register' ? 'สร้างบัญชี Estra' : 'เข้าสู่ระบบ'}
+                </button>
+              </form>
+
+              <details className="configuration-panel patch-template-panel">
+                <summary>
+                  <ShieldCheck size={15} />
+                  <span>
+                    {isSupabaseGatewayUrl(resolveSocialServerUrl(settings?.socialServerUrl))
+                      ? 'Estra Online Cloud (Supabase + Rate Limit) · พร้อมใช้งาน'
+                      : 'ตั้งค่า Social Server (เชื่อมต่อข้ามเครื่อง / Local)'}
+                  </span>
+                </summary>
+                <div className="patch-template-body">
+                  <div className="input-container">
+                    <input
+                      type="text"
+                      aria-label="Social Server URL"
+                      value={serverDraft}
+                      onChange={e => setServerDraft(e.target.value)}
+                      placeholder="https://... หรือพิมพ์ local เพื่อใช้ในเครื่อง"
+                    />
+                    <button type="button" className="btn-inline-orange" onClick={handleSaveServerUrl}>
+                      บันทึก
+                    </button>
+                  </div>
+                  <div className="settings-actions" style={{ justifyContent: 'flex-start', marginTop: 8 }}>
+                    <button
+                      type="button"
+                      className="btn-action-refresh"
+                      onClick={() => {
+                        setServerDraft(SUPABASE_SOCIAL_GATEWAY_URL);
+                        setError('');
+                        onSaveSettings({ ...settings, socialServerUrl: SUPABASE_SOCIAL_GATEWAY_URL });
+                      }}
+                    >
+                      ใช้ Supabase Online
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-action-refresh"
+                      onClick={() => {
+                        setServerDraft(LOCAL_SOCIAL_SENTINEL);
+                        setError('');
+                        onSaveSettings({ ...settings, socialServerUrl: LOCAL_SOCIAL_SENTINEL });
+                      }}
+                    >
+                      ใช้ Local ในเครื่อง
+                    </button>
+                  </div>
+                  <small className="help-text">
+                    ระบบออนไลน์ 100% ผ่าน Supabase Auth + RLS + Rate Limit และเก็บเซสชันฝั่งเซิร์ฟเวอร์ (ไม่เก็บ token ใน localStorage)
+                  </small>
+                </div>
+              </details>
+            </>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}

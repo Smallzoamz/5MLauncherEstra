@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { apiGet } from '../services/apiService';
 import { generateCitizenFXIni } from '../services/fivemService';
+import { LOCAL_SOCIAL_SENTINEL, SUPABASE_SOCIAL_GATEWAY_URL } from '../shared/supabaseConfig';
 import MaintenanceSettings from './MaintenanceSettings';
 export default function SettingsModal({ isOpen, onClose, settings, onSaveSettings, activeServer, onMaintenanceBusy }) {
   const [form, setForm] = useState(settings);
@@ -29,6 +30,12 @@ export default function SettingsModal({ isOpen, onClose, settings, onSaveSetting
       <button type="button" className="btn-action-refresh" disabled={checking} onClick={checkPath}>{checking ? 'กำลังตรวจ…' : 'ตรวจสอบพาธ'}</button>
       <label htmlFor="github-repo-setting">GitHub Repository สำหรับ Auto-Update (owner/repo)</label>
       <div className="input-container"><input id="github-repo-setting" disabled={maintenanceBusy} value={form.githubRepo || ''} onChange={e => setForm({ ...form, githubRepo: e.target.value })} placeholder="Smallzoamz/5MLauncherEstra" /></div>
+      <label htmlFor="social-server-setting">Social Server URL (ออนไลน์ 100% ผ่าน Supabase Cloud หรือพิมพ์ local)</label>
+      <div className="input-container"><input id="social-server-setting" type="text" disabled={maintenanceBusy} value={form.socialServerUrl || ''} onChange={e => setForm({ ...form, socialServerUrl: e.target.value })} placeholder="พิมพ์ local เพื่อใช้ในเครื่อง หรือวาง URL ของ Social Server" /></div>
+      <div className="settings-actions" style={{ justifyContent: 'flex-start' }}>
+        <button type="button" className="btn-action-refresh" disabled={maintenanceBusy} onClick={() => setForm(prev => ({ ...prev, socialServerUrl: SUPABASE_SOCIAL_GATEWAY_URL }))}>คืนค่า Estra Online (Supabase)</button>
+        <button type="button" className="btn-action-refresh" disabled={maintenanceBusy} onClick={() => setForm(prev => ({ ...prev, socialServerUrl: LOCAL_SOCIAL_SENTINEL }))}>สลับเป็น Local Mode</button>
+      </div>
       {[
         ['checkMicBeforeLaunch', 'ตรวจสิทธิ์และเปิดไมโครโฟนก่อนเล่น', 'ตรวจว่าเปิดอุปกรณ์ได้ ส่วนคุณภาพเสียงให้ทดสอบในหน้าเช็คไมค์'],
         ['autoClearCacheBeforeLaunch', 'ล้างแคชก่อนเปิดเกม', 'ลบแคชเซิร์ฟเวอร์ทุกครั้งที่กดเล่น ต้องปิด FiveM ก่อน'],
