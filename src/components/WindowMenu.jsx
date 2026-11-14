@@ -19,7 +19,7 @@ export default function WindowMenu() {
   return <details className="window-menu" ref={menu}>
     <summary aria-label="เมนูหน้าต่าง Estra" title="เมนูหน้าต่าง Estra"><Ellipsis size={20} /></summary>
     <div className="window-menu-panel" aria-label="ควบคุมหน้าต่าง">
-      <img src="/brand/estra-wordmark.svg" alt="Estra FiveM Launcher" />
+      <img src="/brand/estra-logo.png" alt="Estra FiveM Launcher" />
       <button onClick={() => act('minimize')}><Minus size={16} />ย่อหน้าต่าง</button>
       <button onClick={() => act('hideToTray')}><Minus size={16} />ซ่อนลง System Tray</button>
       <button onClick={() => act('toggleMaximize')}><Maximize2 size={16} />ขยาย / คืนขนาดหน้าต่าง</button>

@@ -1,12 +1,15 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowRight,
   CheckCircle2,
   Download,
   RefreshCw,
+  RotateCcw,
   Settings2,
   ShieldCheck,
   Sparkles,
+  Volume2,
+  VolumeX,
   XCircle
 } from 'lucide-react';
 import ServerAvatar from './ServerAvatar';
@@ -24,6 +27,8 @@ import { isTauriDesktop } from '../services/desktopBridge';
 import { APP_VERSION, DEFAULT_GITHUB_REPO, formatBytes } from '../shared/patcherConfig';
 
 const AUTO_ENTER_MS = 1100;
+const SPLASH_MIN_DURATION_MS = 6200;
+const SPLASH_EXIT_MS = 220;
 
 export default function PrelaunchPatcher({
   activeServer,
@@ -45,13 +50,38 @@ export default function PrelaunchPatcher({
   const [appProgress, setAppProgress] = useState(null);
   const [runId, setRunId] = useState(0);
   const [autoEnterCancelled, setAutoEnterCancelled] = useState(false);
+  const [muted, setMuted] = useState(true);
+  const [videoEnded, setVideoEnded] = useState(false);
+  const [entering, setEntering] = useState(false);
 
   const runToken = useRef(0);
   const timerRef = useRef(null);
+  const exitTimerRef = useRef(null);
+  const videoRef = useRef(null);
+  const mountedAtRef = useRef(Date.now());
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
 
-  useEffect(() => () => clearTimeout(timerRef.current), []);
+  useEffect(() => () => {
+    clearTimeout(timerRef.current);
+    clearTimeout(exitTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = true;
+    video.play?.().catch(() => {});
+  }, []);
+
+  const enterLauncherSmoothly = useCallback(() => {
+    clearTimeout(timerRef.current);
+    clearTimeout(exitTimerRef.current);
+    setEntering(true);
+    exitTimerRef.current = setTimeout(() => {
+      onEnterLauncher();
+    }, SPLASH_EXIT_MS);
+  }, [onEnterLauncher]);
 
   useEffect(() => {
     const unsubPatch = subscribePatchProgress(payload => {
@@ -98,9 +128,11 @@ export default function PrelaunchPatcher({
 
     const scheduleAutoEnter = () => {
       if (!alive() || pausedRef.current) return;
+      const elapsed = Date.now() - mountedAtRef.current;
+      const delay = Math.max(AUTO_ENTER_MS, SPLASH_MIN_DURATION_MS - elapsed);
       timerRef.current = setTimeout(() => {
-        if (alive() && !pausedRef.current) onEnterLauncher();
-      }, AUTO_ENTER_MS);
+        if (alive() && !pausedRef.current) enterLauncherSmoothly();
+      }, delay);
     };
 
     const runChecks = async () => {
@@ -250,16 +282,73 @@ export default function PrelaunchPatcher({
   };
 
   const isBusy = phase === 'checking-app' || phase === 'checking-city' || phase === 'patching-city' || phase === 'updating-app';
-  const showNotes = (phase === 'app-update-ready' && launcherUpdate?.notes) || cityCheck?.notes;
+  const showNotes = Boolean((phase === 'app-update-ready' && launcherUpdate?.notes) || cityCheck?.notes);
+
+  const toggleMute = () => {
+    const nextMuted = !muted;
+    setMuted(nextMuted);
+    if (videoRef.current) {
+      videoRef.current.muted = nextMuted;
+      if (!nextMuted && videoEnded) {
+        videoRef.current.currentTime = 0;
+        setVideoEnded(false);
+        videoRef.current.play?.().catch(() => {});
+      }
+    }
+  };
+
+  const replaySplashVideo = () => {
+    if (!videoRef.current) return;
+    videoRef.current.currentTime = 0;
+    setVideoEnded(false);
+    videoRef.current.play?.().catch(() => {});
+  };
 
   return (
-    <section className="prelaunch-patcher" aria-label="ตัวตรวจอัปเดตและแพตช์ก่อนเข้าลันเชอร์">
+    <section
+      className={`prelaunch-patcher prelaunch-splash${entering ? ' is-entering' : ''}`}
+      aria-label="หน้า Splash ตรวจอัปเดตและแพตช์ก่อนเข้าลันเชอร์"
+    >
+      <div className="prelaunch-video-backdrop" aria-hidden="true">
+        <video
+          ref={videoRef}
+          className="prelaunch-video"
+          src="/brand/estra-splash.mp4"
+          poster="/brand/estra-splash-poster.jpg"
+          autoPlay
+          muted={muted}
+          playsInline
+          preload="auto"
+          onEnded={() => setVideoEnded(true)}
+        />
+        <div className="prelaunch-video-scrim" />
+      </div>
+
       <div className="prelaunch-topbar header-wrap" data-tauri-drag-region>
         <div className="prelaunch-brand" data-tauri-drag-region>
-          <img src="/brand/estra-wordmark.svg" alt="Estra" />
-          <span className="prelaunch-badge">PATCHER · v{APP_VERSION}</span>
+          <span className="prelaunch-badge">ESTRA · v{APP_VERSION}</span>
+          {activeServer && (
+            <span className="prelaunch-server-chip">
+              <ServerAvatar server={activeServer} className="prelaunch-avatar" />
+              <span>{activeServer.name}</span>
+            </span>
+          )}
         </div>
         <div className="prelaunch-top-actions">
+          {videoEnded && (
+            <button type="button" className="prelaunch-icon-btn" onClick={replaySplashVideo} title="เล่นแอนิเมชันอีกครั้ง" aria-label="เล่นแอนิเมชันอีกครั้ง">
+              <RotateCcw size={14} />
+            </button>
+          )}
+          <button
+            type="button"
+            className="prelaunch-icon-btn"
+            onClick={toggleMute}
+            title={muted ? 'เปิดเสียง Intro' : 'ปิดเสียง Intro'}
+            aria-label={muted ? 'เปิดเสียง Intro' : 'ปิดเสียง Intro'}
+          >
+            {muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+          </button>
           <button type="button" className="prelaunch-link-btn" disabled={isBusy} onClick={handleOpenSettings}>
             <Settings2 size={14} /> ตั้งค่า Patcher
           </button>
@@ -268,34 +357,7 @@ export default function PrelaunchPatcher({
       </div>
 
       <div className="prelaunch-stage">
-        <div className="prelaunch-hero">
-          <div className="prelaunch-target-row">
-            {activeServer && <ServerAvatar server={activeServer} className="prelaunch-avatar" />}
-            <div>
-              <span className="eyebrow">
-                {activeServer ? `${activeServer.tag || 'FiveM'} · ${activeServer.ip}` : 'ESTRA DESKTOP'}
-              </span>
-              <strong className="prelaunch-city-label">{activeServer ? activeServer.name : 'Estra FiveM Launcher'}</strong>
-            </div>
-          </div>
-
-          <h1 className="prelaunch-title">
-            <span>{headline}</span>
-          </h1>
-          <p className="prelaunch-subtitle">{detail}</p>
-
-          <div className="prelaunch-steps" aria-label="สถานะขั้นตอนแพตช์">
-            <span className={`prelaunch-step ${phase === 'checking-app' ? 'active' : 'done'}`}>
-              <ShieldCheck size={13} /> 1. ตรวจเวอร์ชัน Launcher
-            </span>
-            <span className={`prelaunch-step ${phase === 'checking-city' || phase === 'patching-city' ? 'active' : phase === 'ready' ? 'done' : ''}`}>
-              <Download size={13} /> 2. ตรวจและซิงก์แพตช์เมือง
-            </span>
-            <span className={`prelaunch-step ${phase === 'ready' ? 'done active' : ''}`}>
-              <CheckCircle2 size={13} /> 3. พร้อมเปิดหน้าลันเชอร์
-            </span>
-          </div>
-
+        <div className="prelaunch-overlay-stack">
           {showNotes && (
             <div className="prelaunch-notes-card">
               <span className="eyebrow">
@@ -314,21 +376,35 @@ export default function PrelaunchPatcher({
         <div className="prelaunch-dock">
           <div className="prelaunch-meter-head">
             <div className="prelaunch-meter-meta">
+              <div className="prelaunch-headline-row">
+                <span className={`prelaunch-status-dot${phase === 'error' ? ' error' : phase === 'ready' ? ' ready' : ' busy'}`} />
+                <strong className="prelaunch-headline">{headline}</strong>
+              </div>
               <span className="prelaunch-status-label">
                 {phase === 'patching-city' && cityProgress
-                  ? `ไฟล์ ${cityProgress.completedFiles}/${cityProgress.totalFiles} · ${formatBytes(cityProgress.downloadedBytes)}${cityProgress.totalBytes > 0 ? ` / ${formatBytes(cityProgress.totalBytes)}` : ''}`
+                  ? `ไฟล์ ${cityProgress.completedFiles}/${cityProgress.totalFiles} · ${formatBytes(cityProgress.downloadedBytes)}${cityProgress.totalBytes > 0 ? ` / ${formatBytes(cityProgress.totalBytes)}` : ''} — ${detail}`
                   : phase === 'updating-app' && appProgress
-                    ? `${formatBytes(appProgress.downloaded || 0)}${appProgress.total ? ` / ${formatBytes(appProgress.total)}` : ''}`
+                    ? `${formatBytes(appProgress.downloaded || 0)}${appProgress.total ? ` / ${formatBytes(appProgress.total)}` : ''} — ${detail}`
                     : phase === 'ready'
-                      ? (autoEnterCancelled || paused ? 'พร้อมใช้งานแล้ว — กดเข้าสู่หน้าลันเชอร์ได้เลย' : 'อัปเดตครบถ้วน กำลังเข้าสู่หน้าลันเชอร์…')
-                      : phase === 'app-update-ready'
-                        ? `เวอร์ชันใหม่ v${launcherUpdate?.version} พร้อมติดตั้ง`
-                        : phase === 'error'
-                          ? 'หยุดชั่วคราวเนื่องจากพบข้อผิดพลาด'
-                          : 'กำลังทำงาน…'}
+                      ? (autoEnterCancelled || paused ? 'พร้อมใช้งานแล้ว — กดเข้าสู่หน้าลันเชอร์ได้เลย' : detail)
+                      : detail}
               </span>
             </div>
-            <strong className="prelaunch-percent" aria-live="polite">{percent}%</strong>
+
+            <div className="prelaunch-meter-right">
+              <div className="prelaunch-steps-compact" aria-label="สถานะขั้นตอนแพตช์">
+                <span className={`prelaunch-step-pill ${phase === 'checking-app' ? 'active' : 'done'}`} title="1. ตรวจเวอร์ชัน Launcher">
+                  <ShieldCheck size={12} /> ระบบ
+                </span>
+                <span className={`prelaunch-step-pill ${phase === 'checking-city' || phase === 'patching-city' ? 'active' : phase === 'ready' ? 'done' : ''}`} title="2. ตรวจและซิงก์แพตช์เมือง">
+                  <Download size={12} /> แพตช์
+                </span>
+                <span className={`prelaunch-step-pill ${phase === 'ready' ? 'done active' : ''}`} title="3. พร้อมเปิดหน้าลันเชอร์">
+                  <CheckCircle2 size={12} /> พร้อม
+                </span>
+              </div>
+              <strong className="prelaunch-percent" aria-live="polite">{percent}%</strong>
+            </div>
           </div>
 
           <div
@@ -352,12 +428,12 @@ export default function PrelaunchPatcher({
                   <XCircle size={15} /> ยกเลิกการโหลด
                 </button>
               ) : (
-                <button type="button" className="btn-action-refresh" disabled={isBusy} onClick={handleRetry}>
-                  <RefreshCw size={15} className={isBusy ? 'spinning' : ''} /> ตรวจสอบซ้ำ
+                <button type="button" className="prelaunch-subtle-btn" disabled={isBusy} onClick={handleRetry}>
+                  <RefreshCw size={14} className={isBusy ? 'spinning' : ''} /> ตรวจสอบซ้ำ
                 </button>
               )}
-              <button type="button" className="soft-button" disabled={isBusy} onClick={handleOpenSettings}>
-                <Settings2 size={15} /> จัดการ URL / ไฟล์แพตช์
+              <button type="button" className="prelaunch-subtle-btn" disabled={isBusy} onClick={handleOpenSettings}>
+                <Settings2 size={14} /> จัดการ URL / ไฟล์แพตช์
               </button>
             </div>
 
@@ -371,10 +447,7 @@ export default function PrelaunchPatcher({
                 type="button"
                 className={phase === 'app-update-ready' ? 'btn-action-refresh' : 'btn-action-play'}
                 disabled={phase === 'updating-app' || phase === 'patching-city'}
-                onClick={() => {
-                  clearTimeout(timerRef.current);
-                  onEnterLauncher();
-                }}
+                onClick={enterLauncherSmoothly}
               >
                 <span>{phase === 'app-update-ready' ? 'ข้ามไปหน้าลันเชอร์' : 'เข้าสู่หน้าลันเชอร์'}</span>
                 <ArrowRight size={16} />

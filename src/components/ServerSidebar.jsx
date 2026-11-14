@@ -83,7 +83,7 @@ export default function ServerSidebar({
           onClick={() => onChangeTab('general')}
           title="Estra FiveM Launcher"
         >
-          <img src="/brand/estra-mark.svg" alt="Estra" />
+          <img src="/brand/estra-mark.png" alt="Estra" />
           <span>Estra</span>
         </button>
 
