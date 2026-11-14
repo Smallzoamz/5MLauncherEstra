@@ -3,7 +3,7 @@ import { History, Play, Trash2, X } from 'lucide-react';
 import { findHistoryCity, latestHistoryCity, HISTORY_LIMIT } from '../services/launchHistory';
 const labels = { preparing: 'กำลังเตรียมเกม', sent: 'ส่งคำสั่งเปิดแล้ว', failed: 'เปิดไม่สำเร็จ', interrupted: 'ไม่ทราบผล — ลันเชอร์หยุดระหว่างทำงาน' };
 const date = value => new Date(value).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' });
-export default function LaunchHistory({ history, servers, busy, onLaunch, onClear, onClose }) {
+export default function LaunchHistory({ history, servers, busy, onLaunch, onClear, onClose, onRequestConfirm }) {
   const [confirmClear, setConfirmClear] = useState(false);
   const latest = latestHistoryCity(history.entries, servers);
   return <div className="modal-backdrop" onClick={onClose}><section className="modal-dialog library-dialog history-dialog" role="dialog" aria-modal="true" aria-label="ประวัติการเปิดเกม" onClick={event => event.stopPropagation()}>
@@ -22,7 +22,20 @@ export default function LaunchHistory({ history, servers, busy, onLaunch, onClea
           {!current && <small className="help-text">เมืองถูกลบหรือเปลี่ยนที่อยู่แล้ว กรุณาเลือกจากเมืองของฉัน</small>}
         </li>;
       })}</ol>}
-      {!!history.entries.length && <div className="history-clear">{confirmClear ? <><span>ล้างประวัติทั้งหมด? รายชื่อเมืองยังอยู่ครบ</span><button className="quiet-button" disabled={busy} onClick={() => setConfirmClear(false)}>ยกเลิก</button><button className="btn-action-cache" disabled={busy} onClick={() => { onClear(); setConfirmClear(false); }}>ยืนยันล้างประวัติ</button></> : <button className="quiet-button" disabled={busy} onClick={() => setConfirmClear(true)}><Trash2 size={14} />ล้างประวัติ</button>}</div>}
+      {!!history.entries.length && <div className="history-clear">{confirmClear ? <><span>ล้างประวัติทั้งหมด? รายชื่อเมืองยังอยู่ครบ</span><button className="quiet-button" disabled={busy} onClick={() => setConfirmClear(false)}>ยกเลิก</button><button className="btn-action-cache" disabled={busy} onClick={() => { onClear(); setConfirmClear(false); }}>ยืนยันล้างประวัติ</button></> : <button className="quiet-button" disabled={busy} onClick={() => {
+        if (onRequestConfirm) {
+          onRequestConfirm({
+            title: 'ล้างประวัติการเปิดเกม',
+            message: 'ต้องการล้างประวัติการเปิดเกมทั้งหมดใช่หรือไม่?',
+            detail: 'รายชื่อเมืองและเมืองโปรดทั้งหมดยังคงอยู่ครบ',
+            confirmLabel: 'ยืนยันล้างประวัติ',
+            tone: 'danger',
+            onConfirm: () => onClear()
+          });
+        } else {
+          setConfirmClear(true);
+        }
+      }}><Trash2 size={14} />ล้างประวัติ</button>}</div>}
     </div>
   </section></div>;
 }

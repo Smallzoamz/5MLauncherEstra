@@ -38,7 +38,8 @@ export default function FriendsSidebar({
   onSeedDemoFriends,
   onInviteFriend,
   onRespondInvite,
-  onJoinFriendServer
+  onJoinFriendServer,
+  onRequestConfirm
 }) {
   const [tab, setTab] = useState('friends');
   const [search, setSearch] = useState('');
@@ -320,7 +321,20 @@ export default function FriendsSidebar({
                           canInvite={!!activeServer?.ip && !friend.isDemo && friend.presence !== 'offline' && typeof onInviteFriend === 'function'}
                           activeServerName={activeServer?.name}
                           onToggleFavorite={() => onToggleFavoriteFriend(friend.id, !friend.isFavorite)}
-                          onRemove={() => onRemoveFriend(friend.id)}
+                          onRemove={() => {
+                            if (onRequestConfirm) {
+                              onRequestConfirm({
+                                title: 'ลบออกจากรายชื่อเพื่อน',
+                                message: `ต้องการลบ "${friend.displayName}" ออกจากรายชื่อเพื่อนใช่หรือไม่?`,
+                                detail: 'สามารถค้นหาหรือส่งคำขอเป็นเพื่อนใหม่ได้ในภายหลัง',
+                                confirmLabel: 'ลบเพื่อน',
+                                tone: 'danger',
+                                onConfirm: () => onRemoveFriend(friend.id)
+                              });
+                            } else {
+                              void onRemoveFriend(friend.id);
+                            }
+                          }}
                           onJoin={() => friend.currentServer && onJoinFriendServer(friend.currentServer)}
                           onInvite={async () => {
                             setInviteNotice(null);
@@ -363,7 +377,20 @@ export default function FriendsSidebar({
                           canInvite={!!activeServer?.ip && !friend.isDemo && friend.presence !== 'offline' && typeof onInviteFriend === 'function'}
                           activeServerName={activeServer?.name}
                           onToggleFavorite={() => onToggleFavoriteFriend(friend.id, !friend.isFavorite)}
-                          onRemove={() => onRemoveFriend(friend.id)}
+                          onRemove={() => {
+                            if (onRequestConfirm) {
+                              onRequestConfirm({
+                                title: 'ลบออกจากรายชื่อเพื่อน',
+                                message: `ต้องการลบ "${friend.displayName}" ออกจากรายชื่อเพื่อนใช่หรือไม่?`,
+                                detail: 'สามารถค้นหาหรือส่งคำขอเป็นเพื่อนใหม่ได้ในภายหลัง',
+                                confirmLabel: 'ลบเพื่อน',
+                                tone: 'danger',
+                                onConfirm: () => onRemoveFriend(friend.id)
+                              });
+                            } else {
+                              void onRemoveFriend(friend.id);
+                            }
+                          }}
                           onJoin={() => friend.currentServer && onJoinFriendServer(friend.currentServer)}
                           onInvite={async () => {
                             setInviteNotice(null);
@@ -540,9 +567,7 @@ function FriendRow({ friend, canInvite, activeServerName, onToggleFavorite, onRe
           className="friend-remove-btn"
           aria-label={`ลบเพื่อน ${friend.displayName}`}
           title="ลบเพื่อน"
-          onClick={() => {
-            if (window.confirm(`ลบ "${friend.displayName}" ออกจากรายชื่อเพื่อน?`)) onRemove();
-          }}
+          onClick={onRemove}
         >
           <UserMinus size={13} />
         </button>

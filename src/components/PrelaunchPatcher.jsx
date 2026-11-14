@@ -21,7 +21,7 @@ import {
   subscribeUpdaterProgress
 } from '../services/patcherService';
 import { isTauriDesktop } from '../services/desktopBridge';
-import { APP_VERSION, formatBytes, isConfiguredGithubRepo } from '../shared/patcherConfig';
+import { APP_VERSION, DEFAULT_GITHUB_REPO, formatBytes } from '../shared/patcherConfig';
 
 const AUTO_ENTER_MS = 1100;
 
@@ -107,24 +107,22 @@ export default function PrelaunchPatcher({
       setPhase('checking-app');
       setPercent(22);
       setHeadline('กำลังตรวจสอบอัปเดต Estra Launcher…');
-      setDetail(`เชื่อมต่อ GitHub Releases (${settings.githubRepo})`);
+      setDetail('เชื่อมต่อเซิร์ฟเวอร์อัปเดต Estra Launcher');
 
-      if (isConfiguredGithubRepo(settings.githubRepo)) {
-        try {
-          const info = await checkLauncherUpdate(settings.githubRepo);
-          if (!alive()) return;
-          onLauncherUpdateChange?.(info);
-          if (info?.available) {
-            setPhase('app-update-ready');
-            setPercent(50);
-            setHeadline(`พบเวอร์ชันใหม่ v${info.version}`);
-            setDetail(`พร้อมอัปเดตจาก v${info.currentVersion || APP_VERSION} เป็น v${info.version}`);
-            return;
-          }
-        } catch (err) {
-          if (!alive()) return;
-          setWarning(`ตรวจเช็กอัปเดตตัวลันเชอร์ไม่สำเร็จ: ${err.message}`);
+      try {
+        const info = await checkLauncherUpdate(DEFAULT_GITHUB_REPO);
+        if (!alive()) return;
+        onLauncherUpdateChange?.(info);
+        if (info?.available) {
+          setPhase('app-update-ready');
+          setPercent(50);
+          setHeadline(`พบเวอร์ชันใหม่ v${info.version}`);
+          setDetail(`พร้อมอัปเดตจาก v${info.currentVersion || APP_VERSION} เป็น v${info.version}`);
+          return;
         }
+      } catch (err) {
+        if (!alive()) return;
+        setWarning(`ตรวจเช็กอัปเดตตัวลันเชอร์ไม่สำเร็จ: ${err.message}`);
       }
 
       if (!alive()) return;
@@ -203,7 +201,7 @@ export default function PrelaunchPatcher({
       setDetail(
         manifestUrl && !isTauriDesktop()
           ? 'โหมดพรีวิวเบราว์เซอร์ — การโหลดไฟล์แพตช์จริงทำงานในแอปเดสก์ท็อป'
-          : `Estra Launcher v${APP_VERSION} · ${settings.githubRepo}`
+          : `Estra Launcher v${APP_VERSION}`
       );
       scheduleAutoEnter();
     };
@@ -227,7 +225,7 @@ export default function PrelaunchPatcher({
     setHeadline(`กำลังอัปเดต Estra Launcher เป็น v${launcherUpdate?.version || ''}…`);
     setDetail('กำลังดาวน์โหลดและตรวจสอบลายเซ็น Minisign จาก GitHub Releases');
     try {
-      await installLauncherUpdate(settings.githubRepo);
+      await installLauncherUpdate(DEFAULT_GITHUB_REPO);
     } catch (err) {
       setPhase('app-update-ready');
       setError(err.message);
@@ -279,7 +277,6 @@ export default function PrelaunchPatcher({
               </span>
               <strong className="prelaunch-city-label">{activeServer ? activeServer.name : 'Estra FiveM Launcher'}</strong>
             </div>
-            <span className="prelaunch-repo-chip">{settings.githubRepo}</span>
           </div>
 
           <h1 className="prelaunch-title">

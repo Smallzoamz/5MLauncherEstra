@@ -10,6 +10,7 @@ import CacheModal from './components/CacheModal';
 import SettingsModal from './components/SettingsModal';
 import NewServerModal from './components/NewServerModal';
 import PatcherModal from './components/PatcherModal';
+import ConfirmModal from './components/ConfirmModal';
 import useDialogFocus from './components/useDialogFocus';
 import { getSavedServers, saveServers, getActiveServerId, saveActiveServerId, getSettings, saveSettings } from './services/storageService';
 import { queryServerInfo } from './services/fivemService';
@@ -20,8 +21,8 @@ import { prepareLaunch } from './services/prepareLaunch';
 import { createLaunchHistory, latestHistoryCity } from './services/launchHistory';
 import LaunchHistory from './components/LaunchHistory';
 import PrelaunchPatcher from './components/PrelaunchPatcher';
-import { checkLauncherUpdate } from './services/patcherService';
-import { isConfiguredGithubRepo } from './shared/patcherConfig';
+import { checkLauncherUpdate, installLauncherUpdate } from './services/patcherService';
+import { DEFAULT_GITHUB_REPO } from './shared/patcherConfig';
 import {
   fetchRealtimeToken,
   fetchSocialSession,
@@ -74,6 +75,9 @@ export default function App() {
   const [social, setSocial] = useState(EMPTY_SOCIAL);
   const [gameEnv, setGameEnv] = useState(null);
   const [dismissedInvites, setDismissedInvites] = useState({});
+  const [confirmState, setConfirmState] = useState(null);
+  const requestConfirm = useCallback(opts => setConfirmState(opts), []);
+  const closeConfirm = useCallback(() => setConfirmState(null), []);
 
   const setModal = value => {
     if (settingsBusy) return;
@@ -103,11 +107,20 @@ export default function App() {
   useEffect(() => presenceService.subscribe(setPresence), []);
 
   useEffect(() => {
-    if (showPatcherScreen || !isConfiguredGithubRepo(settings.githubRepo)) return;
+    if (showPatcherScreen) return;
     let active = true;
-    void checkLauncherUpdate(settings.githubRepo).then(info => { if (active) setLauncherUpdate(info); }).catch(() => {});
-    return () => { active = false; };
-  }, [settings.githubRepo, showPatcherScreen]);
+    const pollUpdate = () => {
+      void checkLauncherUpdate(DEFAULT_GITHUB_REPO)
+        .then(info => { if (active) setLauncherUpdate(info); })
+        .catch(() => {});
+    };
+    pollUpdate();
+    const timer = setInterval(pollUpdate, 30 * 60_000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [showPatcherScreen]);
 
   useEffect(() => historyStore.subscribe(setHistory), [historyStore]);
 
@@ -404,7 +417,7 @@ export default function App() {
   }, [latestCity?.id, latestCity?.name, launchBusy, modal, settingsBusy, showPatcherScreen]);
   useEffect(() => window.estraWindow?.onGameStatus(setGameNotice), []);
 
-  useDialogFocus(modal, () => setModal(null));
+  useDialogFocus(modal, () => { if (!confirmState) setModal(null); });
   useEffect(() => { try { saveServers(servers); setStorageError(''); } catch { setStorageError('บันทึกข้อมูลไม่ได้ กรุณาอนุญาต browser storage การเปลี่ยนแปลงอาจหายเมื่อปิดหน้า'); } }, [servers]);
   useEffect(() => { try { saveActiveServerId(activeId); } catch { setStorageError('บันทึกเซิร์ฟเวอร์ที่เลือกไม่ได้'); } }, [activeId]);
 
@@ -498,8 +511,22 @@ export default function App() {
             {launcherUpdate?.available && (
               <p className="notice main-alert-strip" role="status">
                 มี Estra Launcher เวอร์ชันใหม่ v{launcherUpdate.version} พร้อมอัปเดต —{' '}
+                <button
+                  type="button"
+                  className="btn-inline-cobalt"
+                  onClick={() => requestConfirm({
+                    title: 'อัปเดต Estra Launcher',
+                    message: `ต้องการดาวน์โหลดและติดตั้งเวอร์ชัน v${launcherUpdate.version} และรีสตาร์ทโปรแกรมใช่หรือไม่?`,
+                    detail: 'ระบบจะตรวจสอบลายเซ็นความปลอดภัยก่อนติดตั้งอัตโนมัติ',
+                    confirmLabel: 'อัปเดตเลย',
+                    tone: 'primary',
+                    onConfirm: () => installLauncherUpdate(DEFAULT_GITHUB_REPO)
+                  })}
+                >
+                  อัปเดตเลย
+                </button>{' '}
                 <button type="button" className="btn-inline-orange" onClick={() => setModal('patcher')}>
-                  เปิด Patcher
+                  ดูรายละเอียด
                 </button>
               </p>
             )}
@@ -589,6 +616,7 @@ export default function App() {
               return res;
             }}
             onJoinFriendServer={handleJoinFriendServer}
+            onRequestConfirm={requestConfirm}
           />
         </div>
       )}
@@ -651,6 +679,7 @@ export default function App() {
           onSelect={id => { handleSelectServer(id); setModal(null); }}
           onToggleFavorite={handleToggleFavoriteServer}
           onRemove={id => { setServers(prev => prev.filter(s => s.id !== id)); if (active?.id === id) setActiveId(''); }}
+          onRequestConfirm={requestConfirm}
         />
       )}
       {modal === 'history' && (
@@ -661,6 +690,7 @@ export default function App() {
           onLaunch={city => { setActiveId(city.id); void launchCity(city); }}
           onClear={() => historyStore.clear()}
           onClose={() => setModal(null)}
+          onRequestConfirm={requestConfirm}
         />
       )}
       <AuthModal
@@ -669,17 +699,28 @@ export default function App() {
         onClose={() => setModal(null)}
         social={social}
         settings={settings}
-        onSaveSettings={savePrefs}
         onLogin={handleLogin}
         onRegister={handleRegister}
         onLogout={handleLogout}
         onChangeStatus={handleChangeStatus}
+        onRequestConfirm={requestConfirm}
       />
       <MicTestModal isOpen={modal === 'mic'} onClose={() => setModal(null)} settings={settings} onSaveSettings={savePrefs} />
       <CacheModal isOpen={modal === 'cache'} onClose={() => setModal(null)} settings={settings} />
-      <SettingsModal isOpen={modal === 'settings'} onClose={() => setModal(null)} settings={settings} onSaveSettings={savePrefs} activeServer={active} onMaintenanceBusy={setSettingsBusy} gameEnv={gameEnv} onGameEnvUpdate={setGameEnv} />
-      <PatcherModal isOpen={modal === 'patcher'} onClose={() => setModal(null)} activeServer={active} settings={settings} onSaveSettings={savePrefs} onUpdateServer={update} launcherUpdate={launcherUpdate} onLauncherUpdateChange={setLauncherUpdate} onBusyChange={setSettingsBusy} onOpenFullPatcher={showPatcherScreen ? null : () => setShowPatcherScreen(true)} />
+      <SettingsModal isOpen={modal === 'settings'} onClose={() => setModal(null)} settings={settings} onSaveSettings={savePrefs} activeServer={active} onMaintenanceBusy={setSettingsBusy} gameEnv={gameEnv} onGameEnvUpdate={setGameEnv} onRequestConfirm={requestConfirm} />
+      <PatcherModal isOpen={modal === 'patcher'} onClose={() => setModal(null)} activeServer={active} settings={settings} onUpdateServer={update} launcherUpdate={launcherUpdate} onLauncherUpdateChange={setLauncherUpdate} onBusyChange={setSettingsBusy} onOpenFullPatcher={showPatcherScreen ? null : () => setShowPatcherScreen(true)} onRequestConfirm={requestConfirm} />
       <NewServerModal isOpen={modal === 'new'} onClose={() => setModal(null)} onAddServer={server => { setServers(prev => [server, ...prev]); setActiveId(server.id); }} />
+      <ConfirmModal
+        isOpen={!!confirmState}
+        title={confirmState?.title}
+        message={confirmState?.message}
+        detail={confirmState?.detail}
+        confirmLabel={confirmState?.confirmLabel}
+        cancelLabel={confirmState?.cancelLabel}
+        tone={confirmState?.tone}
+        onConfirm={confirmState?.onConfirm}
+        onCancel={closeConfirm}
+      />
     </div>
   );
 }

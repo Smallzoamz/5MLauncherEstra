@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Plus, X, ArrowUpRight, Trash2, Search, Star } from 'lucide-react';
 import ServerAvatar from './ServerAvatar';
 
-export default function ServerLibrary({ servers, activeId, onSelect, onRemove, onToggleFavorite, onAdd, onClose }) {
+export default function ServerLibrary({ servers, activeId, onSelect, onRemove, onToggleFavorite, onAdd, onClose, onRequestConfirm }) {
   const [filter, setFilter] = useState('ทั้งหมด');
   const [search, setSearch] = useState('');
 
@@ -78,13 +78,24 @@ export default function ServerLibrary({ servers, activeId, onSelect, onRemove, o
                     <Star size={15} fill={s.favorite ? 'currentColor' : 'none'} />
                   </button>
                 )}
-                <button
-                  className="server-card-remove"
-                  aria-label={`ลบ ${s.name}`}
-                  onClick={() => {
-                    if (window.confirm(`ลบ "${s.name}" ออกจากรายการเมือง?`)) onRemove(s.id);
-                  }}
-                >
+                  <button
+                    className="server-card-remove"
+                    aria-label={`ลบ ${s.name}`}
+                    onClick={() => {
+                      if (onRequestConfirm) {
+                        onRequestConfirm({
+                          title: 'ลบรายการเมือง',
+                          message: `ต้องการลบ "${s.name}" ออกจากรายการเมืองใช่หรือไม่?`,
+                          detail: 'คุณสามารถเพิ่มเซิร์ฟเวอร์กลับเข้ามาใหม่ได้ตลอดเวลา',
+                          confirmLabel: 'ลบเมือง',
+                          tone: 'danger',
+                          onConfirm: () => onRemove(s.id)
+                        });
+                      } else {
+                        onRemove(s.id);
+                      }
+                    }}
+                  >
                   <Trash2 size={16} />
                 </button>
               </div>

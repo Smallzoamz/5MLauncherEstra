@@ -7,7 +7,6 @@ import {
   AlertTriangle,
   Copy,
   XCircle,
-  GitBranch,
   FolderCheck
 } from 'lucide-react';
 import {
@@ -24,7 +23,6 @@ import {
   DEFAULT_GITHUB_REPO,
   PATCH_MANIFEST_TEMPLATE,
   formatBytes,
-  isValidGithubRepo,
   normalizePatchManifestUrl
 } from '../shared/patcherConfig';
 
@@ -33,16 +31,15 @@ export default function PatcherModal({
   onClose,
   activeServer,
   settings,
-  onSaveSettings,
   onUpdateServer,
   launcherUpdate,
   onLauncherUpdateChange,
   onBusyChange,
-  onOpenFullPatcher
+  onOpenFullPatcher,
+  onRequestConfirm
 }) {
   const [tab, setTab] = useState('city');
   const [manifestDraft, setManifestDraft] = useState('');
-  const [repoDraft, setRepoDraft] = useState(DEFAULT_GITHUB_REPO);
   const [cityCheck, setCityCheck] = useState(null);
   const [cityBusy, setCityBusy] = useState(false);
   const [cityProgress, setCityProgress] = useState(null);
@@ -61,11 +58,10 @@ export default function PatcherModal({
   useEffect(() => {
     if (!isOpen) return;
     setManifestDraft(activeServer?.patchManifestUrl || '');
-    setRepoDraft(settings.githubRepo || DEFAULT_GITHUB_REPO);
     setCityMessage(null);
     setAppMessage(null);
     setCopiedTemplate(false);
-  }, [isOpen, activeServer?.id, activeServer?.patchManifestUrl, settings.githubRepo]);
+  }, [isOpen, activeServer?.id, activeServer?.patchManifestUrl]);
 
   useEffect(() => {
     const unsubPatch = subscribePatchProgress(payload => setCityProgress(payload));
@@ -156,29 +152,13 @@ export default function PatcherModal({
     }
   };
 
-  const saveRepo = () => {
-    const cleaned = repoDraft.trim();
-    if (!isValidGithubRepo(cleaned)) {
-      setAppMessage({ error: 'รูปแบบ GitHub Repository ต้องเป็น owner/repo เช่น estra-team/5MLauncher' });
-      return null;
-    }
-    onSaveSettings({ ...settings, githubRepo: cleaned });
-    setRepoDraft(cleaned);
-    setAppMessage({ notice: `บันทึก GitHub Repository (${cleaned}) แล้ว` });
-    return cleaned;
-  };
-
   const handleCheckLauncherUpdate = async () => {
-    const repo = repoDraft.trim() === (settings.githubRepo || DEFAULT_GITHUB_REPO)
-      ? (settings.githubRepo || DEFAULT_GITHUB_REPO)
-      : saveRepo();
-    if (!repo) return;
     setAppBusy(true);
     setAppMessage(null);
     try {
-      const info = await checkLauncherUpdate(repo);
+      const info = await checkLauncherUpdate(DEFAULT_GITHUB_REPO);
       onLauncherUpdateChange?.(info);
-      setAppMessage(info.available ? { notice: info.message } : { notice: info.message });
+      setAppMessage({ notice: info.message });
     } catch (err) {
       setAppMessage({ error: err.message });
     } finally {
@@ -187,16 +167,30 @@ export default function PatcherModal({
   };
 
   const handleInstallLauncherUpdate = async () => {
-    const repo = settings.githubRepo || repoDraft.trim() || DEFAULT_GITHUB_REPO;
     setAppBusy(true);
     setAppMessage(null);
     setAppProgress({ phase: 'downloading', downloaded: 0, total: null, percent: 0 });
     try {
-      await installLauncherUpdate(repo);
+      await installLauncherUpdate(DEFAULT_GITHUB_REPO);
     } catch (err) {
       setAppMessage({ error: err.message });
       setAppBusy(false);
     }
+  };
+
+  const confirmInstallLauncherUpdate = () => {
+    if (!onRequestConfirm) {
+      void handleInstallLauncherUpdate();
+      return;
+    }
+    onRequestConfirm({
+      title: 'อัปเดต Estra Launcher',
+      message: `ต้องการดาวน์โหลดและติดตั้งเวอร์ชัน v${launcherUpdate?.version || ''} และรีสตาร์ทโปรแกรมใช่หรือไม่?`,
+      detail: 'ระบบจะตรวจสอบลายเซ็นความปลอดภัยก่อนติดตั้งอัตโนมัติ',
+      confirmLabel: 'อัปเดตและรีสตาร์ท',
+      tone: 'primary',
+      onConfirm: handleInstallLauncherUpdate
+    });
   };
 
   const copyTemplate = async () => {
@@ -365,31 +359,15 @@ export default function PatcherModal({
           <div className="modal-body">
             <div className="patcher-summary-card">
               <div>
-                <span className="eyebrow">ESTRA FIVEM LAUNCHER · TAURI / RUST</span>
+                <span className="eyebrow">ESTRA FIVEM LAUNCHER</span>
                 <strong>เวอร์ชันปัจจุบัน v{launcherUpdate?.currentVersion || APP_VERSION}</strong>
                 <small className="help-text">
-                  ตรวจสอบอัปเดตผ่าน GitHub Releases (ยืนยันลายเซ็น Minisign อัตโนมัติ)
+                  ตรวจสอบอัปเดตอัตโนมัติพร้อมยืนยันลายเซ็นความปลอดภัยก่อนติดตั้งทุกครั้ง
                 </small>
               </div>
               <span className={`patch-status-pill ${launcherUpdate?.available ? 'pending' : 'ok'}`}>
                 {launcherUpdate?.available ? `มีเวอร์ชัน v${launcherUpdate.version}` : 'พร้อมใช้งาน'}
               </span>
-            </div>
-
-            <div>
-              <label className="field-label" htmlFor="github-repo-input">GitHub Repository (owner/repo)</label>
-              <div className="input-container">
-                <GitBranch size={16} />
-                <input
-                  id="github-repo-input"
-                  disabled={appBusy}
-                  value={repoDraft}
-                  onChange={e => setRepoDraft(e.target.value)}
-                  placeholder="owner/5MLauncher"
-                />
-                <button type="button" className="btn-inline-orange" disabled={appBusy} onClick={saveRepo}>บันทึก</button>
-              </div>
-              <small className="help-text">ดึงไฟล์ <code>latest.json</code> จาก GitHub Releases ล่าสุดของ Repo นี้</small>
             </div>
 
             <div className="patcher-actions-row">
@@ -400,7 +378,7 @@ export default function PatcherModal({
                 type="button"
                 className="btn-action-play"
                 disabled={appBusy || !launcherUpdate?.available}
-                onClick={handleInstallLauncherUpdate}
+                onClick={confirmInstallLauncherUpdate}
               >
                 <Download size={15} /> {appBusy ? 'กำลังอัปเดต…' : 'อัปเดตและรีสตาร์ท'}
               </button>

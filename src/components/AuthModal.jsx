@@ -2,16 +2,12 @@ import React, { useEffect, useState } from 'react';
 import {
   Check,
   Copy,
-  Globe,
   LogIn,
   LogOut,
-  ShieldCheck,
   UserPlus,
   X
 } from 'lucide-react';
 import {
-  LOCAL_SOCIAL_SENTINEL,
-  SUPABASE_SOCIAL_GATEWAY_URL,
   isSupabaseGatewayUrl,
   resolveSocialServerUrl
 } from '../shared/supabaseConfig';
@@ -29,18 +25,17 @@ export default function AuthModal({
   onClose,
   social,
   settings,
-  onSaveSettings,
   onLogin,
   onRegister,
   onLogout,
-  onChangeStatus
+  onChangeStatus,
+  onRequestConfirm
 }) {
   const [mode, setMode] = useState(initialMode);
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [serverDraft, setServerDraft] = useState(settings?.socialServerUrl || '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [copiedCode, setCopiedCode] = useState(false);
@@ -51,9 +46,8 @@ export default function AuthModal({
     setError('');
     setPassword('');
     setConfirmPassword('');
-    setServerDraft(settings?.socialServerUrl || '');
     setCopiedCode(false);
-  }, [isOpen, initialMode, settings?.socialServerUrl]);
+  }, [isOpen, initialMode]);
 
   if (!isOpen) return null;
 
@@ -79,27 +73,6 @@ export default function AuthModal({
     } finally {
       setBusy(false);
     }
-  };
-
-  const handleSaveServerUrl = () => {
-    const clean = serverDraft.trim();
-    if (clean && clean.toLowerCase() !== LOCAL_SOCIAL_SENTINEL) {
-      try {
-        const u = new URL(clean);
-        if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password) {
-          setError('URL ของ Social Server ต้องขึ้นต้นด้วย http:// หรือ https:// และไม่มีข้อมูลล็อกอินใน URL');
-          return;
-        }
-      } catch {
-        setError('รูปแบบ URL ของ Social Server ไม่ถูกต้อง (หรือพิมพ์ local เพื่อใช้ในเครื่อง)');
-        return;
-      }
-    }
-    setError('');
-    onSaveSettings({
-      ...settings,
-      socialServerUrl: clean.toLowerCase() === LOCAL_SOCIAL_SENTINEL ? LOCAL_SOCIAL_SENTINEL : (clean || LOCAL_SOCIAL_SENTINEL)
-    });
   };
 
   const copyFriendCode = async () => {
@@ -183,39 +156,36 @@ export default function AuthModal({
                 </div>
               </div>
 
-              <div className="social-server-box">
-                <label className="field-label" htmlFor="auth-social-server">
-                  <Globe size={13} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-                  Social Server URL ({isSupabaseGatewayUrl(resolveSocialServerUrl(settings?.socialServerUrl)) ? 'ออนไลน์ 100% · Supabase Cloud' : 'โหมดในเครื่อง / กำหนดเอง'})
-                </label>
-                <div className="input-container">
-                  <input
-                    id="auth-social-server"
-                    type="text"
-                    value={serverDraft}
-                    onChange={e => setServerDraft(e.target.value)}
-                    placeholder="https://... หรือพิมพ์ local เพื่อใช้ในเครื่อง"
-                  />
-                  <button type="button" className="btn-inline-orange" onClick={handleSaveServerUrl}>
-                    บันทึก URL
-                  </button>
-                </div>
-              </div>
-
               {error && <p role="alert" className="error-message">{error}</p>}
 
               <div className="settings-actions">
+                <span className="help-text" style={{ marginRight: 'auto' }}>
+                  สถานะระบบ: {isSupabaseGatewayUrl(resolveSocialServerUrl(settings?.socialServerUrl)) ? 'Estra Online Cloud' : 'โหมดในเครื่อง'}
+                </span>
                 <button
                   type="button"
                   className="btn-action-cache"
                   disabled={busy}
-                  onClick={async () => {
-                    setBusy(true);
-                    try {
-                      await onLogout();
-                      onClose();
-                    } finally {
-                      setBusy(false);
+                  onClick={() => {
+                    const doLogout = async () => {
+                      setBusy(true);
+                      try {
+                        await onLogout();
+                        onClose();
+                      } finally {
+                        setBusy(false);
+                      }
+                    };
+                    if (onRequestConfirm) {
+                      onRequestConfirm({
+                        title: 'ออกจากระบบ Estra Account',
+                        message: `ต้องการออกจากระบบบัญชี @${user.username} ใช่หรือไม่?`,
+                        confirmLabel: 'ออกจากระบบ',
+                        tone: 'danger',
+                        onConfirm: doLogout
+                      });
+                    } else {
+                      void doLogout();
                     }
                   }}
                 >
@@ -318,58 +288,6 @@ export default function AuthModal({
                   {busy ? 'กำลังดำเนินการ…' : mode === 'register' ? 'สร้างบัญชี Estra' : 'เข้าสู่ระบบ'}
                 </button>
               </form>
-
-              <details className="configuration-panel patch-template-panel">
-                <summary>
-                  <ShieldCheck size={15} />
-                  <span>
-                    {isSupabaseGatewayUrl(resolveSocialServerUrl(settings?.socialServerUrl))
-                      ? 'Estra Online Cloud (Supabase + Rate Limit) · พร้อมใช้งาน'
-                      : 'ตั้งค่า Social Server (เชื่อมต่อข้ามเครื่อง / Local)'}
-                  </span>
-                </summary>
-                <div className="patch-template-body">
-                  <div className="input-container">
-                    <input
-                      type="text"
-                      aria-label="Social Server URL"
-                      value={serverDraft}
-                      onChange={e => setServerDraft(e.target.value)}
-                      placeholder="https://... หรือพิมพ์ local เพื่อใช้ในเครื่อง"
-                    />
-                    <button type="button" className="btn-inline-orange" onClick={handleSaveServerUrl}>
-                      บันทึก
-                    </button>
-                  </div>
-                  <div className="settings-actions" style={{ justifyContent: 'flex-start', marginTop: 8 }}>
-                    <button
-                      type="button"
-                      className="btn-action-refresh"
-                      onClick={() => {
-                        setServerDraft(SUPABASE_SOCIAL_GATEWAY_URL);
-                        setError('');
-                        onSaveSettings({ ...settings, socialServerUrl: SUPABASE_SOCIAL_GATEWAY_URL });
-                      }}
-                    >
-                      ใช้ Supabase Online
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-action-refresh"
-                      onClick={() => {
-                        setServerDraft(LOCAL_SOCIAL_SENTINEL);
-                        setError('');
-                        onSaveSettings({ ...settings, socialServerUrl: LOCAL_SOCIAL_SENTINEL });
-                      }}
-                    >
-                      ใช้ Local ในเครื่อง
-                    </button>
-                  </div>
-                  <small className="help-text">
-                    ระบบออนไลน์ 100% ผ่าน Supabase Auth + RLS + Rate Limit และเก็บเซสชันฝั่งเซิร์ฟเวอร์ (ไม่เก็บ token ใน localStorage)
-                  </small>
-                </div>
-              </details>
             </>
           )}
         </div>
