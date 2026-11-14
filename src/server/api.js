@@ -10,7 +10,7 @@ import {
 } from './fivemBackend.js';
 import { previewMaintenance, cleanMaintenance } from './maintenance.js';
 import { createSocialStore } from './socialStore.js';
-import { SUPABASE_PUBLISHABLE_KEY, isSupabaseGatewayUrl } from '../shared/supabaseConfig.js';
+import { SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL, isSupabaseGatewayUrl } from '../shared/supabaseConfig.js';
 
 const SOCIAL_COOKIE = 'estra_social_session';
 const SOCIAL_REFRESH_COOKIE = 'estra_social_refresh';
@@ -18,6 +18,7 @@ const SOCIAL_REFRESH_COOKIE = 'estra_social_refresh';
 const DEFAULT_SOCIAL_RATE_LIMITS = {
   '/api/social/register': { max: 6, windowMs: 10 * 60_000 },
   '/api/social/login': { max: 15, windowMs: 5 * 60_000 },
+  '/api/social/change-password': { max: 10, windowMs: 5 * 60_000 },
   '/api/social/profile-update': { max: 20, windowMs: 10 * 60_000 },
   '/api/social/friend-request': { max: 20, windowMs: 60 * 60_000 },
   '/api/social/game-invite': { max: 20, windowMs: 10 * 60_000 },
@@ -112,6 +113,134 @@ function normalizeRemoteSocialUrl(raw) {
   }
 }
 
+async function changePasswordViaSupabase({ remoteSocialBase, cookies, body, fetchFn = fetch }) {
+  const currentPassword = typeof body?.currentPassword === 'string' ? body.currentPassword : '';
+  const newPassword = typeof body?.newPassword === 'string' ? body.newPassword : '';
+  if (!currentPassword || currentPassword.length > 128) {
+    return { status: 400, data: { success: false, error: 'กรุณากรอกรหัสผ่านเดิม' } };
+  }
+  if (newPassword.length < 6 || newPassword.length > 128) {
+    return { status: 400, data: { success: false, error: 'รหัสผ่านใหม่ต้องมี 6-128 ตัวอักษร' } };
+  }
+  if (newPassword === currentPassword) {
+    return { status: 400, data: { success: false, error: 'รหัสผ่านใหม่ต้องไม่ซ้ำกับรหัสผ่านเดิม' } };
+  }
+
+  const supabaseOrigin = (() => {
+    try {
+      return new URL(remoteSocialBase).origin;
+    } catch {
+      return SUPABASE_URL;
+    }
+  })();
+
+  let accessToken = cookies[SOCIAL_COOKIE] || '';
+  if (!accessToken && cookies[SOCIAL_REFRESH_COOKIE]) {
+    const meRes = await fetchFn(`${remoteSocialBase}/api/social/me`, {
+      method: 'GET',
+      headers: {
+        apikey: SUPABASE_PUBLISHABLE_KEY,
+        'X-Refresh-Token': cookies[SOCIAL_REFRESH_COOKIE]
+      },
+      signal: AbortSignal.timeout(12000)
+    });
+    const meJson = await meRes.json().catch(() => null);
+    if (meJson?.token) accessToken = meJson.token;
+  }
+
+  if (!accessToken) {
+    return { status: 401, data: { success: false, error: 'กรุณาเข้าสู่ระบบบัญชี Estra ก่อนใช้งาน' } };
+  }
+
+  const userRes = await fetchFn(`${supabaseOrigin}/auth/v1/user`, {
+    method: 'GET',
+    headers: {
+      apikey: SUPABASE_PUBLISHABLE_KEY,
+      Authorization: `Bearer ${accessToken}`
+    },
+    signal: AbortSignal.timeout(12000)
+  });
+  const authUser = await userRes.json().catch(() => null);
+  const email = authUser?.email || '';
+  if (!userRes.ok || !email) {
+    return { status: 401, data: { success: false, error: 'กรุณาเข้าสู่ระบบบัญชี Estra ใหม่อีกครั้ง' } };
+  }
+
+  const verifyRes = await fetchFn(`${supabaseOrigin}/auth/v1/token?grant_type=password`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: SUPABASE_PUBLISHABLE_KEY
+    },
+    body: JSON.stringify({ email, password: currentPassword }),
+    signal: AbortSignal.timeout(12000)
+  });
+  const verified = await verifyRes.json().catch(() => null);
+  if (!verifyRes.ok || !verified?.access_token) {
+    return { status: 401, data: { success: false, error: 'รหัสผ่านเดิมไม่ถูกต้อง' } };
+  }
+
+  const updRes = await fetchFn(`${supabaseOrigin}/auth/v1/user`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: SUPABASE_PUBLISHABLE_KEY,
+      Authorization: `Bearer ${verified.access_token}`
+    },
+    body: JSON.stringify({ password: newPassword }),
+    signal: AbortSignal.timeout(12000)
+  });
+  const updJson = await updRes.json().catch(() => null);
+  if (!updRes.ok) {
+    return { status: 400, data: { success: false, error: updJson?.msg || updJson?.message || 'อัปเดตรหัสผ่านไม่สำเร็จ' } };
+  }
+
+  const nextRes = await fetchFn(`${supabaseOrigin}/auth/v1/token?grant_type=password`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: SUPABASE_PUBLISHABLE_KEY
+    },
+    body: JSON.stringify({ email, password: newPassword }),
+    signal: AbortSignal.timeout(12000)
+  });
+  const nextSession = await nextRes.json().catch(() => null);
+  const finalAccess = nextSession?.access_token || verified.access_token;
+  const finalRefresh = nextSession?.refresh_token || verified.refresh_token || '';
+
+  const rpcRes = await fetchFn(`${supabaseOrigin}/rest/v1/rpc/launcher_complete_password_change`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: SUPABASE_PUBLISHABLE_KEY,
+      Authorization: `Bearer ${finalAccess}`
+    },
+    body: '{}',
+    signal: AbortSignal.timeout(12000)
+  });
+  const rpcOut = await rpcRes.json().catch(() => null);
+  if (!rpcRes.ok || rpcOut?.errorStatus) {
+    return {
+      status: Number(rpcOut?.errorStatus || rpcRes.status || 400),
+      data: { success: false, error: rpcOut?.error || 'ยืนยันการเปลี่ยนรหัสผ่านไม่สำเร็จ' }
+    };
+  }
+
+  return {
+    status: 200,
+    data: {
+      success: true,
+      authenticated: true,
+      mode: 'supabase',
+      user: rpcOut?.user || null,
+      favoriteServers: rpcOut?.favoriteServers || [],
+      token: finalAccess,
+      refreshToken: finalRefresh,
+      message: 'เปลี่ยนรหัสผ่านเรียบร้อยแล้ว'
+    }
+  };
+}
+
 export function createApi(services = {}) {
   const token = randomBytes(32).toString('hex');
   const handlers = {
@@ -170,6 +299,7 @@ export function createApi(services = {}) {
       '/api/social/realtime-token': 'GET',
       '/api/social/register': 'POST',
       '/api/social/login': 'POST',
+      '/api/social/change-password': 'POST',
       '/api/social/logout': 'POST',
       '/api/social/heartbeat': 'POST',
       '/api/social/profile-update': 'POST',
@@ -251,22 +381,35 @@ export function createApi(services = {}) {
           } else if (req.headers.cookie) {
             headers.Cookie = req.headers.cookie;
           }
-          const body = isPost
-            ? JSON.stringify(await readBody(req, pathname === '/api/social/profile-update' ? 65536 : 8192))
+          const rawBody = isPost
+            ? await readBody(req, pathname === '/api/social/profile-update' ? 65536 : 8192)
             : undefined;
+          const body = rawBody !== undefined ? JSON.stringify(rawBody) : undefined;
           const upstream = await fetch(targetUrl, {
             method: req.method,
             headers,
             body,
             signal: AbortSignal.timeout(12000)
           });
-          const text = await upstream.text();
+          let finalStatus = upstream.status;
+          let text = await upstream.text();
           let parsed = null;
           try { parsed = JSON.parse(text); } catch {}
 
+          if (
+            isSupabase &&
+            pathname === '/api/social/change-password' &&
+            (upstream.status === 404 || parsed?.error === 'Social API action not found')
+          ) {
+            const fallback = await changePasswordViaSupabase({ remoteSocialBase, cookies, body: rawBody });
+            finalStatus = fallback.status;
+            parsed = fallback.data;
+            text = JSON.stringify(parsed);
+          }
+
           const setCookies = [];
           const upstreamCookie = upstream.headers.get('set-cookie');
-          if (upstreamCookie) setCookies.push(upstreamCookie);
+          if (upstreamCookie && finalStatus === upstream.status) setCookies.push(upstreamCookie);
 
           if (isSupabase && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
             if (typeof parsed.token === 'string' && parsed.token) {
@@ -309,7 +452,7 @@ export function createApi(services = {}) {
           if (upstreamRetryAfter) resHeaders['Retry-After'] = upstreamRetryAfter;
           if (setCookies.length === 1) resHeaders['Set-Cookie'] = setCookies[0];
           else if (setCookies.length > 1) resHeaders['Set-Cookie'] = setCookies;
-          res.writeHead(upstream.status, resHeaders);
+          res.writeHead(finalStatus, resHeaders);
           res.end(parsed ? JSON.stringify(parsed) : text);
           return;
         }
@@ -391,6 +534,9 @@ export function createApi(services = {}) {
         }
 
         const body = await readBody(req, pathname === '/api/social/profile-update' ? 65536 : 8192);
+        if (pathname === '/api/social/change-password') {
+          return send(res, 200, { success: true, ...social.changePassword(userId, body) });
+        }
         if (pathname === '/api/social/heartbeat') {
           return send(res, 200, { success: true, ...social.updateHeartbeat(userId, body) });
         }

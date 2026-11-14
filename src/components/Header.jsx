@@ -11,8 +11,7 @@ export default function Header({
   launcherUpdate,
   gameNotice,
   social,
-  onToggleFriendsMobile,
-  onOpenAuth
+  onToggleFriendsMobile
 }) {
   const [presence, setPresence] = useState(presenceService.getPresence());
   const [notifOpen, setNotifOpen] = useState(false);
@@ -167,15 +166,6 @@ export default function Header({
                     </li>
                   ))}
                 </ul>
-              )}
-              {!social?.authenticated && (
-                <button
-                  type="button"
-                  className="soft-button notif-login-btn"
-                  onClick={() => { setNotifOpen(false); onOpenAuth('login'); }}
-                >
-                  เข้าสู่ระบบ Estra Account
-                </button>
               )}
             </div>
           )}

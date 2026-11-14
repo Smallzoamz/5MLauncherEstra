@@ -37,6 +37,8 @@ export default function PrelaunchPatcher({
   onLauncherUpdateChange,
   onOpenPatcherSettings,
   onEnterLauncher,
+  nextStepLabel = 'เข้าสู่ระบบ / สมัครสมาชิก',
+  skipStepLabel = 'ข้ามไปหน้าเข้าสู่ระบบ',
   paused
 }) {
   const [phase, setPhase] = useState('checking-app');
@@ -386,7 +388,7 @@ export default function PrelaunchPatcher({
                   : phase === 'updating-app' && appProgress
                     ? `${formatBytes(appProgress.downloaded || 0)}${appProgress.total ? ` / ${formatBytes(appProgress.total)}` : ''} — ${detail}`
                     : phase === 'ready'
-                      ? (autoEnterCancelled || paused ? 'พร้อมใช้งานแล้ว — กดเข้าสู่หน้าลันเชอร์ได้เลย' : detail)
+                      ? (autoEnterCancelled || paused ? 'พร้อมใช้งานแล้ว — กดดำเนินการต่อได้เลย' : detail)
                       : detail}
               </span>
             </div>
@@ -449,7 +451,7 @@ export default function PrelaunchPatcher({
                 disabled={phase === 'updating-app' || phase === 'patching-city'}
                 onClick={enterLauncherSmoothly}
               >
-                <span>{phase === 'app-update-ready' ? 'ข้ามไปหน้าลันเชอร์' : 'เข้าสู่หน้าลันเชอร์'}</span>
+                <span>{phase === 'app-update-ready' ? skipStepLabel : nextStepLabel}</span>
                 <ArrowRight size={16} />
               </button>
             </div>

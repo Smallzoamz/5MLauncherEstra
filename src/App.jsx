@@ -5,6 +5,7 @@ import ServerSidebar from './components/ServerSidebar';
 import FriendsSidebar from './components/FriendsSidebar';
 import MainLauncher from './components/MainLauncher';
 import AuthModal from './components/AuthModal';
+import AuthScreen from './components/AuthScreen';
 import MicTestModal from './components/MicTestModal';
 import CacheModal from './components/CacheModal';
 import SettingsModal from './components/SettingsModal';
@@ -27,6 +28,7 @@ import PrelaunchPatcher from './components/PrelaunchPatcher';
 import { checkLauncherUpdate, installLauncherUpdate } from './services/patcherService';
 import { DEFAULT_GITHUB_REPO } from './shared/patcherConfig';
 import {
+  changePassword,
   fetchRealtimeToken,
   fetchSocialSession,
   fetchSocialState,
@@ -66,7 +68,6 @@ export default function App() {
   const [activeId, setActiveId] = useState(getActiveServerId);
   const [settings, setSettings] = useState(getSettings);
   const [modal, setVisibleModal] = useState(null);
-  const [authInitialMode, setAuthInitialMode] = useState('login');
   const [modalClosing, setModalClosing] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const modalTimer = useRef(null);
@@ -107,13 +108,14 @@ export default function App() {
   const launchLock = useRef(false);
   const [launchFeedback, setLaunchFeedback] = useState(null);
   const [launcherUpdate, setLauncherUpdate] = useState(null);
-  const [showPatcherScreen, setShowPatcherScreen] = useState(true);
+  const [screenStage, setScreenStage] = useState('splash');
   const [presence, setPresence] = useState(presenceService.getPresence());
+  const mustChangePromptedRef = useRef(false);
 
   useEffect(() => presenceService.subscribe(setPresence), []);
 
   useEffect(() => {
-    if (showPatcherScreen) return;
+    if (screenStage !== 'launcher') return;
     let active = true;
     const pollUpdate = () => {
       void checkLauncherUpdate(DEFAULT_GITHUB_REPO)
@@ -126,7 +128,29 @@ export default function App() {
       active = false;
       clearInterval(timer);
     };
-  }, [showPatcherScreen]);
+  }, [screenStage]);
+
+  useEffect(() => {
+    if (screenStage === 'auth' && social.authenticated) {
+      setScreenStage('launcher');
+    } else if (screenStage === 'launcher' && !social.loading && !social.authenticated) {
+      clearTimeout(modalTimer.current);
+      setVisibleModal(null);
+      setModalClosing(false);
+      setScreenStage('auth');
+    }
+  }, [screenStage, social.loading, social.authenticated]);
+
+  useEffect(() => {
+    if (!social.authenticated || !social.user?.mustChangePassword) {
+      mustChangePromptedRef.current = false;
+      return;
+    }
+    if (screenStage === 'launcher' && !mustChangePromptedRef.current) {
+      mustChangePromptedRef.current = true;
+      setModal('auth');
+    }
+  }, [screenStage, social.authenticated, social.user?.mustChangePassword]);
 
   useEffect(() => historyStore.subscribe(setHistory), [historyStore]);
 
@@ -298,8 +322,7 @@ export default function App() {
     };
   }, [social.authenticated, currentServerKey, settings.socialServerUrl]);
 
-  const openAuth = (mode = 'login') => {
-    setAuthInitialMode(mode);
+  const openAccountModal = () => {
     setModal('auth');
   };
 
@@ -307,6 +330,7 @@ export default function App() {
     const res = await loginAccount(payload, settings.socialServerUrl);
     if (res?.authenticated) {
       await refreshSocial();
+      setScreenStage('launcher');
     }
   };
 
@@ -314,12 +338,17 @@ export default function App() {
     const res = await registerAccount(payload, settings.socialServerUrl);
     if (res?.authenticated) {
       await refreshSocial();
+      setScreenStage('launcher');
     }
   };
 
   const handleLogout = async () => {
     await logoutAccount(settings.socialServerUrl);
+    clearTimeout(modalTimer.current);
+    setVisibleModal(null);
+    setModalClosing(false);
     setSocial({ ...EMPTY_SOCIAL, loading: false });
+    setScreenStage('auth');
   };
 
   const handleChangeStatus = async statusPref => {
@@ -332,6 +361,15 @@ export default function App() {
     if (res?.user) {
       setSocial(prev => ({ ...prev, user: res.user }));
     }
+    return res;
+  };
+
+  const handleChangePassword = async payload => {
+    const res = await changePassword(payload, settings.socialServerUrl);
+    if (res?.user) {
+      setSocial(prev => ({ ...prev, user: res.user }));
+    }
+    await refreshSocial();
     return res;
   };
 
@@ -450,11 +488,11 @@ export default function App() {
 
   const latestCity = latestHistoryCity(history.entries, servers);
   const launchLatestRef = useRef(null);
-  launchLatestRef.current = () => { if (latestCity && !modal && !settingsBusy && !showPatcherScreen) { setActiveId(latestCity.id); void launchCity(latestCity); } };
+  launchLatestRef.current = () => { if (latestCity && !modal && !settingsBusy && screenStage === 'launcher') { setActiveId(latestCity.id); void launchCity(latestCity); } };
   useEffect(() => window.estraWindow?.onLaunchLatest(() => launchLatestRef.current?.()), []);
   useEffect(() => {
-    window.estraWindow?.setLatestCity({ name: latestCity?.name || '', enabled: !!latestCity && !launchBusy && !modal && !settingsBusy && !showPatcherScreen });
-  }, [latestCity?.id, latestCity?.name, launchBusy, modal, settingsBusy, showPatcherScreen]);
+    window.estraWindow?.setLatestCity({ name: latestCity?.name || '', enabled: !!latestCity && !launchBusy && !modal && !settingsBusy && screenStage === 'launcher' });
+  }, [latestCity?.id, latestCity?.name, launchBusy, modal, settingsBusy, screenStage]);
   useEffect(() => window.estraWindow?.onGameStatus(payload => {
     setGameNotice(payload ? { ...payload, _seq: ++alertSeqRef.current } : null);
   }), []);
@@ -507,6 +545,20 @@ export default function App() {
   };
 
   const floatingAlerts = [];
+  if (social.authenticated && social.user?.mustChangePassword && !dismissedAlerts[`must-chpw:${social.user.id}`]) {
+    floatingAlerts.push({
+      id: `must-chpw:${social.user.id}`,
+      tone: 'notice',
+      content: (
+        <>
+          บัญชีนี้สมัครผ่าน Discord — กรุณาเปลี่ยนรหัสผ่านใหม่ทันทีหลัง Login ครั้งแรก{' '}
+          <button type="button" className="btn-inline-cobalt" onClick={openAccountModal}>
+            เปลี่ยนรหัสผ่าน
+          </button>
+        </>
+      )
+    });
+  }
   if (launcherUpdate?.available && !dismissedAlerts[`update:${launcherUpdate.version}`]) {
     floatingAlerts.push({
       id: `update:${launcherUpdate.version}`,
@@ -578,15 +630,27 @@ export default function App() {
     <div className={`launcher-window${modalClosing ? ' modal-closing' : ''}`}>
       <CityBackground server={active} onStatus={setBackground} />
       {storageError && <p role="alert" className="error-message">{storageError}</p>}
-      {showPatcherScreen ? (
+      {screenStage === 'splash' ? (
         <PrelaunchPatcher
           activeServer={active}
           settings={settings}
           launcherUpdate={launcherUpdate}
           onLauncherUpdateChange={setLauncherUpdate}
           onOpenPatcherSettings={() => setModal('patcher')}
-          onEnterLauncher={() => setShowPatcherScreen(false)}
+          onEnterLauncher={() => setScreenStage(social.authenticated ? 'launcher' : 'auth')}
+          nextStepLabel={social.authenticated ? 'เข้าสู่หน้าลันเชอร์' : 'เข้าสู่ระบบ / สมัครสมาชิก'}
+          skipStepLabel={social.authenticated ? 'ข้ามไปหน้าลันเชอร์' : 'ข้ามไปหน้าเข้าสู่ระบบ'}
           paused={modal !== null}
+        />
+      ) : screenStage === 'auth' ? (
+        <AuthScreen
+          social={social}
+          settings={settings}
+          communityLinks={communityLinks}
+          onOpenCommunityLink={handleOpenCommunityLink}
+          onOpenSplash={() => setScreenStage('splash')}
+          onLogin={handleLogin}
+          onRegister={handleRegister}
         />
       ) : (
         <div className="launcher-body">
@@ -611,7 +675,7 @@ export default function App() {
             onOpenCacheModal={() => setModal('cache')}
             hasLauncherUpdate={!!launcherUpdate?.available}
             social={social}
-            onOpenAuth={openAuth}
+            onOpenAuth={openAccountModal}
             communityLinks={communityLinks}
             onOpenCommunityLink={handleOpenCommunityLink}
           />
@@ -628,7 +692,6 @@ export default function App() {
                 gameNotice={gameNotice}
                 social={social}
                 onToggleFriendsMobile={() => setFriendsMobileOpen(v => !v)}
-                onOpenAuth={openAuth}
               />
             </div>
 
@@ -671,7 +734,7 @@ export default function App() {
             onCloseMobile={() => setFriendsMobileOpen(false)}
             social={social}
             activeServer={active}
-            onOpenAuth={openAuth}
+            onOpenAuth={openAccountModal}
             onSendFriendRequest={async target => {
               const res = await sendFriendRequest(target, settings.socialServerUrl);
               applySocialStateResponse(res);
@@ -714,7 +777,7 @@ export default function App() {
         </div>
       )}
 
-      {!showPatcherScreen && social.authenticated && (() => {
+      {screenStage === 'launcher' && social.authenticated && (() => {
         const activeInvite = (social.incomingInvites || []).find(inv => !dismissedInvites[inv.id]);
         if (!activeInvite) return null;
         return (
@@ -785,21 +848,19 @@ export default function App() {
       )}
       <AuthModal
         isOpen={modal === 'auth'}
-        initialMode={authInitialMode}
         onClose={() => setModal(null)}
         social={social}
         settings={settings}
-        onLogin={handleLogin}
-        onRegister={handleRegister}
         onLogout={handleLogout}
         onChangeStatus={handleChangeStatus}
         onUpdateProfile={handleUpdateProfile}
+        onChangePassword={handleChangePassword}
         onRequestConfirm={requestConfirm}
       />
       <MicTestModal isOpen={modal === 'mic'} onClose={() => setModal(null)} settings={settings} onSaveSettings={savePrefs} />
       <CacheModal isOpen={modal === 'cache'} onClose={() => setModal(null)} settings={settings} />
       <SettingsModal isOpen={modal === 'settings'} onClose={() => setModal(null)} settings={settings} onSaveSettings={savePrefs} activeServer={active} onMaintenanceBusy={setSettingsBusy} gameEnv={gameEnv} onGameEnvUpdate={setGameEnv} onRequestConfirm={requestConfirm} />
-      <PatcherModal isOpen={modal === 'patcher'} onClose={() => setModal(null)} activeServer={active} settings={settings} onUpdateServer={update} launcherUpdate={launcherUpdate} onLauncherUpdateChange={setLauncherUpdate} onBusyChange={setSettingsBusy} onOpenFullPatcher={showPatcherScreen ? null : () => setShowPatcherScreen(true)} onRequestConfirm={requestConfirm} />
+      <PatcherModal isOpen={modal === 'patcher'} onClose={() => setModal(null)} activeServer={active} settings={settings} onUpdateServer={update} launcherUpdate={launcherUpdate} onLauncherUpdateChange={setLauncherUpdate} onBusyChange={setSettingsBusy} onOpenFullPatcher={screenStage === 'launcher' ? () => setScreenStage('splash') : null} onRequestConfirm={requestConfirm} />
       <NewServerModal isOpen={modal === 'new'} onClose={() => setModal(null)} onAddServer={server => { setServers(prev => [server, ...prev]); setActiveId(server.id); }} />
       <ConfirmModal
         isOpen={!!confirmState}

@@ -38,6 +38,10 @@ export async function updateSocialProfile(payload, socialServerUrl) {
   return apiPost('/api/social/profile-update', payload, socialHeaders(socialServerUrl));
 }
 
+export async function changePassword(payload, socialServerUrl) {
+  return apiPost('/api/social/change-password', payload, socialHeaders(socialServerUrl));
+}
+
 export async function sendFriendRequest(target, socialServerUrl) {
   return apiPost('/api/social/friend-request', { target }, socialHeaders(socialServerUrl));
 }

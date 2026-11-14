@@ -340,3 +340,64 @@ test('sanitizeExternalUrl validates official community links safely', () => {
   assert.equal(defaults.discordUrl, 'https://discord.gg/WYjfK6FWgB');
   assert.equal(defaults.facebookUrl, 'https://www.facebook.com/estralauncher');
 });
+
+test('socialStore and /api/social/change-password enforce first-login password change workflow', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'estra-chpw-'));
+  const dbPath = path.join(dir, 'social.db');
+  const store = createSocialStore({ dbPath });
+  const middleware = createApi({ socialStore: store });
+  const server = http.createServer(middleware);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    await new Promise(resolve => server.close(resolve));
+    store.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  const provisioned = store.register({
+    username: 'discord_newbie',
+    password: 'TempPass-99',
+    displayName: 'Discord Newbie',
+    mustChangePassword: true
+  });
+  assert.equal(provisioned.user.mustChangePassword, true);
+
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const { token } = await fetch(`${base}/api/session`).then(r => r.json());
+  const loginRes = await fetch(`${base}/api/social/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Launcher-Token': token, 'X-Social-Server': LOCAL_SOCIAL_SENTINEL },
+    body: JSON.stringify({ username: 'discord_newbie', password: 'TempPass-99' })
+  });
+  assert.equal(loginRes.status, 200);
+  const loginJson = await loginRes.json();
+  assert.equal(loginJson.user.mustChangePassword, true);
+  const cookieHeader = loginRes.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
+
+  const wrongCur = await fetch(`${base}/api/social/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Launcher-Token': token, 'X-Social-Server': LOCAL_SOCIAL_SENTINEL, Cookie: cookieHeader },
+    body: JSON.stringify({ currentPassword: 'WrongPassword', newPassword: 'NewStrongPass99' })
+  });
+  assert.equal(wrongCur.status, 401);
+
+  const samePw = await fetch(`${base}/api/social/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Launcher-Token': token, 'X-Social-Server': LOCAL_SOCIAL_SENTINEL, Cookie: cookieHeader },
+    body: JSON.stringify({ currentPassword: 'TempPass-99', newPassword: 'TempPass-99' })
+  });
+  assert.equal(samePw.status, 400);
+
+  const okChange = await fetch(`${base}/api/social/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Launcher-Token': token, 'X-Social-Server': LOCAL_SOCIAL_SENTINEL, Cookie: cookieHeader },
+    body: JSON.stringify({ currentPassword: 'TempPass-99', newPassword: 'NewStrongPass99' })
+  });
+  assert.equal(okChange.status, 200);
+  const okJson = await okChange.json();
+  assert.equal(okJson.user.mustChangePassword, false);
+
+  assert.throws(() => store.login({ username: 'discord_newbie', password: 'TempPass-99' }), /ไม่ถูกต้อง/);
+  const nextLogin = store.login({ username: 'discord_newbie', password: 'NewStrongPass99' });
+  assert.equal(nextLogin.user.mustChangePassword, false);
+});

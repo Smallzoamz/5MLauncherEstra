@@ -102,6 +102,7 @@ function toPublicUser(row, now = Date.now(), includePrivate = false) {
   };
   if (includePrivate) {
     user.statusPref = row.status_pref || 'online';
+    user.mustChangePassword = !!row.must_change_password;
   }
   return user;
 }
@@ -125,6 +126,7 @@ export function createSocialStore(options = {}) {
       avatar_url TEXT,
       status_pref TEXT NOT NULL DEFAULT 'online',
       is_demo INTEGER NOT NULL DEFAULT 0,
+      must_change_password INTEGER NOT NULL DEFAULT 0,
       last_seen_at TEXT,
       current_server_id TEXT,
       current_server_name TEXT,
@@ -183,6 +185,9 @@ export function createSocialStore(options = {}) {
   if (!userCols.some(col => col.name === 'avatar_url')) {
     db.exec('ALTER TABLE users ADD COLUMN avatar_url TEXT');
   }
+  if (!userCols.some(col => col.name === 'must_change_password')) {
+    db.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0');
+  }
 
   function createSessionForUser(userId) {
     const now = Date.now();
@@ -214,7 +219,7 @@ export function createSocialStore(options = {}) {
     };
   }
 
-  function register({ username, password, displayName }) {
+  function register({ username, password, displayName, mustChangePassword = false }) {
     const cleanUsername = normalizeUsername(username);
     validateUsername(cleanUsername);
     validatePassword(password);
@@ -231,9 +236,9 @@ export function createSocialStore(options = {}) {
     const nowIso = new Date().toISOString();
     const color = AVATAR_PALETTE[crypto.randomInt(AVATAR_PALETTE.length)];
     db.prepare(`
-      INSERT INTO users (id, username, display_name, friend_code, password_hash, avatar_color, status_pref, is_demo, last_seen_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'online', 0, ?, ?)
-    `).run(id, cleanUsername, cleanDisplay, friendCode, hashPassword(password), color, nowIso, nowIso);
+      INSERT INTO users (id, username, display_name, friend_code, password_hash, avatar_color, status_pref, is_demo, must_change_password, last_seen_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'online', 0, ?, ?, ?)
+    `).run(id, cleanUsername, cleanDisplay, friendCode, hashPassword(password), color, mustChangePassword ? 1 : 0, nowIso, nowIso);
 
     const token = createSessionForUser(id);
     const row = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
@@ -241,6 +246,29 @@ export function createSocialStore(options = {}) {
       token,
       user: toPublicUser(row, Date.now(), true),
       favoriteServers: []
+    };
+  }
+
+  function changePassword(userId, { currentPassword, newPassword } = {}) {
+    if (typeof currentPassword !== 'string' || !currentPassword) {
+      throw Object.assign(new Error('กรุณากรอกรหัสผ่านเดิม'), { status: 400 });
+    }
+    validatePassword(newPassword);
+    if (newPassword === currentPassword) {
+      throw Object.assign(new Error('รหัสผ่านใหม่ต้องไม่ซ้ำกับรหัสผ่านเดิม'), { status: 400 });
+    }
+    const row = db.prepare('SELECT * FROM users WHERE id = ? AND is_demo = 0').get(userId);
+    if (!row || !verifyPassword(currentPassword, row.password_hash)) {
+      throw Object.assign(new Error('รหัสผ่านเดิมไม่ถูกต้อง'), { status: 401 });
+    }
+    const nowIso = new Date().toISOString();
+    db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0, last_seen_at = ? WHERE id = ?')
+      .run(hashPassword(newPassword), nowIso, row.id);
+    const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(row.id);
+    return {
+      user: toPublicUser(updated, Date.now(), true),
+      favoriteServers: getUserFavoriteServers(row.id),
+      message: 'เปลี่ยนรหัสผ่านเรียบร้อยแล้ว'
     };
   }
 
@@ -642,6 +670,7 @@ export function createSocialStore(options = {}) {
     dbPath,
     register,
     login,
+    changePassword,
     logout,
     resolveSession,
     updateHeartbeat,

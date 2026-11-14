@@ -3,14 +3,12 @@ import {
   Check,
   ChevronDown,
   Info,
-  LogIn,
   Play,
   Search,
   Send,
   Star,
   UserMinus,
   UserPlus,
-  Users,
   X
 } from 'lucide-react';
 import { UserAvatar } from './UserAvatar';
@@ -136,9 +134,9 @@ export default function FriendsSidebar({
           <button
             type="button"
             className="icon-button"
-            onClick={() => onOpenAuth('login')}
+            onClick={() => onOpenAuth()}
             aria-label="ข้อมูลบัญชีและสถานะออนไลน์"
-            title={user ? `สถานะ: ${user.presence} · ${user.friendCode}` : 'เข้าสู่ระบบบัญชี Estra'}
+            title={user ? `สถานะ: ${user.presence} · ${user.friendCode}` : 'ข้อมูลบัญชี Estra'}
           >
             <Info size={16} />
           </button>
@@ -153,23 +151,7 @@ export default function FriendsSidebar({
         </div>
       </div>
 
-      {!user ? (
-        <div className="friends-guest-panel">
-          <div className="friends-guest-icon">
-            <Users size={22} />
-          </div>
-          <h3>เชื่อมต่อระบบเพื่อนแบบ Steam</h3>
-          <p>เข้าสู่ระบบหรือสมัครบัญชี Estra เพื่อดูสถานะ Online / Offline, ปักหมุดเพื่อนโปรด และซิงก์เมืองโปรดข้ามเครื่อง</p>
-          <div className="friends-guest-actions">
-            <button type="button" className="btn-action-play friends-cta" onClick={() => onOpenAuth('login')}>
-              <LogIn size={15} /> เข้าสู่ระบบ
-            </button>
-            <button type="button" className="soft-button friends-cta" onClick={() => onOpenAuth('register')}>
-              <UserPlus size={15} /> สมัครสมาชิก
-            </button>
-          </div>
-        </div>
-      ) : (
+      {user ? (
         <>
           <div className="friends-search-bar">
             <label className="friends-search-input">
@@ -482,7 +464,7 @@ export default function FriendsSidebar({
           )}
 
           <div className="friends-rail-footer">
-            <button type="button" className="friends-self-strip" onClick={() => onOpenAuth('login')}>
+            <button type="button" className="friends-self-strip" onClick={() => onOpenAuth()}>
               <UserAvatar user={user} className="friend-avatar self" showPresence />
               <span className="friend-meta">
                 <strong>{user.displayName}</strong>
@@ -491,7 +473,7 @@ export default function FriendsSidebar({
             </button>
           </div>
         </>
-      )}
+      ) : null}
     </aside>
   );
 }

@@ -111,9 +111,9 @@ export default function ServerSidebar({
         <button
           type="button"
           className="rail-account-chip"
-          onClick={() => onOpenAuth(user ? 'login' : 'login')}
-          aria-label={user ? `บัญชี ${user.displayName}` : 'เข้าสู่ระบบบัญชี Estra'}
-          title={user ? `${user.displayName} (${user.presence})` : 'เข้าสู่ระบบ / สมัครสมาชิก'}
+          onClick={() => onOpenAuth()}
+          aria-label={user ? `บัญชี ${user.displayName}` : 'ข้อมูลบัญชี Estra'}
+          title={user ? `${user.displayName} (${user.presence})` : 'จัดการบัญชีและโปรไฟล์'}
         >
           {user ? (
             <UserAvatar user={user} className="rail-user-avatar" showPresence />
@@ -287,7 +287,7 @@ export default function ServerSidebar({
       <div className="rail-bottom-meta">
         <span>ESTRA v{APP_VERSION}</span>
         <span className={`rail-social-pill${user ? ' online' : ''}`}>
-          {user ? `@${user.username}` : 'Guest'}
+          {user ? `@${user.username}` : 'Offline'}
         </span>
       </div>
     </aside>
