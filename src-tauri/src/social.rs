@@ -61,12 +61,27 @@ struct StoredFavoriteServer {
     created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredGameInvite {
+    id: String,
+    from_user_id: String,
+    to_user_id: String,
+    server_id: String,
+    server_name: String,
+    server_ip: String,
+    status: String,
+    created_at: String,
+    expires_at_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct LocalSocialDb {
     users: Vec<StoredUser>,
     friendships: Vec<StoredFriendship>,
     friend_requests: Vec<StoredFriendRequest>,
     favorite_servers: Vec<StoredFavoriteServer>,
+    #[serde(default)]
+    game_invites: Vec<StoredGameInvite>,
     active_user_id: Option<String>,
 }
 
@@ -394,6 +409,38 @@ fn build_social_state(db: &LocalSocialDb, user_id: &str) -> Result<Value, String
         })
         .collect();
 
+    let incoming_invites: Vec<Value> = db
+        .game_invites
+        .iter()
+        .filter(|gi| gi.to_user_id == user_id && gi.status == "pending" && gi.expires_at_ms > now)
+        .filter_map(|gi| {
+            db.users.iter().find(|u| u.id == gi.from_user_id).map(|u| {
+                json!({
+                    "id": gi.id,
+                    "createdAt": gi.created_at,
+                    "server": { "id": gi.server_id, "name": gi.server_name, "ip": gi.server_ip },
+                    "fromUser": public_user(u, now, false),
+                })
+            })
+        })
+        .collect();
+
+    let outgoing_invites: Vec<Value> = db
+        .game_invites
+        .iter()
+        .filter(|gi| gi.from_user_id == user_id && gi.status == "pending" && gi.expires_at_ms > now)
+        .filter_map(|gi| {
+            db.users.iter().find(|u| u.id == gi.to_user_id).map(|u| {
+                json!({
+                    "id": gi.id,
+                    "createdAt": gi.created_at,
+                    "server": { "id": gi.server_id, "name": gi.server_name, "ip": gi.server_ip },
+                    "toUser": public_user(u, now, false),
+                })
+            })
+        })
+        .collect();
+
     Ok(json!({
         "success": true,
         "mode": "local-desktop",
@@ -402,6 +449,8 @@ fn build_social_state(db: &LocalSocialDb, user_id: &str) -> Result<Value, String
         "friends": friends,
         "incomingRequests": incoming,
         "outgoingRequests": outgoing,
+        "incomingInvites": incoming_invites,
+        "outgoingInvites": outgoing_invites,
     }))
 }
 
@@ -803,6 +852,86 @@ fn handle_local(state: &SocialState, path: &str, body: Value) -> Result<Value, S
                     }
                     save_db(&db)?;
                     build_social_state(&db, &uid)
+                }
+                "/api/social/game-invite" => {
+                    let fid = body["friendId"].as_str().unwrap_or("").trim();
+                    if fid.is_empty() || fid == uid {
+                        return Err("ไม่พบเพื่อนที่ต้องการชวน".to_string());
+                    }
+                    if !db.friendships.iter().any(|f| f.user_id == uid && f.friend_id == fid) {
+                        return Err("สามารถชวนได้เฉพาะผู้ที่เป็นเพื่อนกันเท่านั้น".to_string());
+                    }
+                    let friend_name = db
+                        .users
+                        .iter()
+                        .find(|u| u.id == fid && !u.is_demo)
+                        .map(|u| u.display_name.clone())
+                        .ok_or_else(|| "ไม่สามารถส่งคำชวนให้บัญชีตัวอย่างได้".to_string())?;
+                    let srv = &body["server"];
+                    let sid = srv["id"].as_str().unwrap_or("").trim();
+                    let sname = srv["name"].as_str().unwrap_or("").trim();
+                    let sip = srv["ip"].as_str().unwrap_or("").trim();
+                    if sid.is_empty() || sname.is_empty() || sip.is_empty() {
+                        return Err("กรุณาเลือกเมืองก่อนชวนเพื่อน".to_string());
+                    }
+                    for gi in &mut db.game_invites {
+                        if gi.from_user_id == uid && gi.to_user_id == fid && gi.status == "pending" {
+                            gi.status = "cancelled".to_string();
+                        }
+                    }
+                    db.game_invites.push(StoredGameInvite {
+                        id: Uuid::new_v4().to_string(),
+                        from_user_id: uid.clone(),
+                        to_user_id: fid.to_string(),
+                        server_id: sid.chars().take(100).collect(),
+                        server_name: sname.chars().take(100).collect(),
+                        server_ip: sip.chars().take(253).collect(),
+                        status: "pending".to_string(),
+                        created_at: now_iso(),
+                        expires_at_ms: now + 300_000,
+                    });
+                    save_db(&db)?;
+                    let mut st = build_social_state(&db, &uid)?;
+                    st["message"] = json!(format!("ส่งคำชวนเข้าเล่น {sname} ไปยัง {friend_name} แล้ว"));
+                    Ok(st)
+                }
+                "/api/social/game-invite-respond" => {
+                    let iid = body["inviteId"].as_str().unwrap_or("");
+                    let act = body["action"].as_str().unwrap_or("");
+                    let pos = db
+                        .game_invites
+                        .iter()
+                        .position(|gi| gi.id == iid && gi.status == "pending")
+                        .ok_or_else(|| "คำชวนหมดอายุหรือถูกจัดการแล้ว".to_string())?;
+                    if db.game_invites[pos].expires_at_ms <= now {
+                        db.game_invites[pos].status = "expired".to_string();
+                        save_db(&db)?;
+                        return Err("คำชวนหมดอายุแล้ว".to_string());
+                    }
+                    let inv_server = json!({
+                        "id": db.game_invites[pos].server_id,
+                        "name": db.game_invites[pos].server_name,
+                        "ip": db.game_invites[pos].server_ip,
+                    });
+                    match act {
+                        "cancel" => {
+                            if db.game_invites[pos].from_user_id != uid {
+                                return Err("ไม่มีสิทธิ์ยกเลิกคำชวนนี้".to_string());
+                            }
+                            db.game_invites[pos].status = "cancelled".to_string();
+                        }
+                        "accept" | "decline" => {
+                            if db.game_invites[pos].to_user_id != uid {
+                                return Err("ไม่มีสิทธิ์จัดการคำชวนนี้".to_string());
+                            }
+                            db.game_invites[pos].status = if act == "accept" { "accepted" } else { "declined" }.to_string();
+                        }
+                        _ => return Err("คำสั่งไม่ถูกต้อง".to_string()),
+                    }
+                    save_db(&db)?;
+                    let mut st = build_social_state(&db, &uid)?;
+                    st["inviteServer"] = inv_server;
+                    Ok(st)
                 }
                 _ => Err("Social route not found".to_string()),
             }

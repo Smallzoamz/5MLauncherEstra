@@ -1,20 +1,83 @@
 import React, { useState, useEffect } from 'react';
-import { apiGet } from '../services/apiService';
+import { apiGet, apiPost } from '../services/apiService';
 import { generateCitizenFXIni } from '../services/fivemService';
 import { LOCAL_SOCIAL_SENTINEL, SUPABASE_SOCIAL_GATEWAY_URL } from '../shared/supabaseConfig';
 import MaintenanceSettings from './MaintenanceSettings';
-export default function SettingsModal({ isOpen, onClose, settings, onSaveSettings, activeServer, onMaintenanceBusy }) {
+
+export default function SettingsModal({ isOpen, onClose, settings, onSaveSettings, activeServer, onMaintenanceBusy, gameEnv, onGameEnvUpdate }) {
   const [form, setForm] = useState(settings);
   const [message, setMessage] = useState('');
   const [checking, setChecking] = useState(false);
+  const [installingFiveM, setInstallingFiveM] = useState(false);
+  const [installDir, setInstallDir] = useState('');
+  const [envInfo, setEnvInfo] = useState(gameEnv || null);
   const [maintenanceBusy, setMaintenanceBusy] = useState(false);
-  useEffect(() => { if (isOpen) { setForm({ ...settings }); setMessage(''); } }, [isOpen, settings]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setForm({ ...settings });
+    setMessage('');
+    setEnvInfo(gameEnv || null);
+    setInstallDir(settings.fivemPath || gameEnv?.suggestedInstallDir || 'D:\\EstraFiveM\\FiveM');
+  }, [isOpen, settings, gameEnv]);
+
   if (!isOpen) return null;
+
   const checkPath = async () => {
     setChecking(true);
-    try { const data = await apiGet(`/api/installation?path=${encodeURIComponent(form.fivemPath)}`); setMessage(`พบ FiveM: ${data.exe}`); }
-    catch (err) { setMessage(err.message); } finally { setChecking(false); }
+    try {
+      const data = await apiGet(`/api/installation?path=${encodeURIComponent(form.fivemPath)}`);
+      setMessage(`พบ FiveM: ${data.exe}`);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setChecking(false);
+    }
   };
+
+  const detectEnvironment = async () => {
+    setChecking(true);
+    try {
+      const env = await apiGet(`/api/game-environment?path=${encodeURIComponent(form.fivemPath)}`);
+      setEnvInfo(env);
+      onGameEnvUpdate?.(env);
+      if (env?.suggestedInstallDir && !installDir) setInstallDir(env.suggestedInstallDir);
+      if (env?.fivem?.found && env.fivem.root) {
+        setForm(prev => ({ ...prev, fivemPath: env.fivem.root }));
+        setMessage(`ตรวจพบ FiveM (${env.fivem.source}): ${env.fivem.exe}${env.gtav?.found ? ` • GTA V (${env.gtav.source})` : ''}`);
+      } else if (env?.gtav?.found) {
+        setMessage(`ตรวจพบ GTA V (${env.gtav.source}) ที่ ${env.gtav.root} แต่ยังไม่พบ FiveM — สามารถกดติดตั้ง FiveM ด้านล่างได้`);
+      } else {
+        setMessage('ยังไม่พบ GTA V หรือ FiveM ในเครื่อง กรุณาระบุพาธหรือติดตั้ง FiveM ด้านล่าง');
+      }
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const installFiveM = async () => {
+    setInstallingFiveM(true);
+    onMaintenanceBusy?.(true);
+    try {
+      const res = await apiPost('/api/install-fivem', { targetDir: installDir });
+      if (res?.root) {
+        const nextForm = { ...form, fivemPath: res.root };
+        setForm(nextForm);
+        onSaveSettings(nextForm);
+      }
+      setMessage(res.message || `ติดตั้ง FiveM ที่ ${res.exe} สำเร็จ`);
+      void detectEnvironment();
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setInstallingFiveM(false);
+      onMaintenanceBusy?.(false);
+    }
+  };
+
+  const busy = maintenanceBusy || installingFiveM;
   const exportIni = () => {
     try {
       const url = URL.createObjectURL(new Blob([generateCitizenFXIni(activeServer)], { type: 'text/plain' }));
@@ -22,19 +85,67 @@ export default function SettingsModal({ isOpen, onClose, settings, onSaveSetting
       setMessage('ดาวน์โหลดตัวอย่างแล้ว ใช้เทียบค่าเท่านั้น อย่าแทนที่ config เดิมทั้งไฟล์');
     } catch (err) { setMessage(err.message); }
   };
-  return <div className="modal-backdrop" onClick={() => !maintenanceBusy && onClose()}><div className="modal-dialog" role="dialog" aria-modal="true" aria-label="การตั้งค่า Launcher" onClick={e => e.stopPropagation()}>
-    <div className="modal-header"><div className="modal-title">การตั้งค่า Launcher</div><button className="modal-close-btn" disabled={maintenanceBusy} onClick={onClose} aria-label="ปิด">✕</button></div>
-    <form className="modal-body" onSubmit={e => { e.preventDefault(); if (!maintenanceBusy) { onSaveSettings(form); onClose(); } }}>
-      <label htmlFor="fivem-path">ตำแหน่ง FiveM.exe หรือโฟลเดอร์ติดตั้ง</label>
-      <div className="input-container"><input id="fivem-path" disabled={maintenanceBusy} value={form.fivemPath} onChange={e => setForm({ ...form, fivemPath: e.target.value })} placeholder="เว้นว่างเพื่อตรวจหาอัตโนมัติ" /></div>
-      <button type="button" className="btn-action-refresh" disabled={checking} onClick={checkPath}>{checking ? 'กำลังตรวจ…' : 'ตรวจสอบพาธ'}</button>
-      <label htmlFor="github-repo-setting">GitHub Repository สำหรับ Auto-Update (owner/repo)</label>
-      <div className="input-container"><input id="github-repo-setting" disabled={maintenanceBusy} value={form.githubRepo || ''} onChange={e => setForm({ ...form, githubRepo: e.target.value })} placeholder="Smallzoamz/5MLauncherEstra" /></div>
-      <label htmlFor="social-server-setting">Social Server URL (ออนไลน์ 100% ผ่าน Supabase Cloud หรือพิมพ์ local)</label>
-      <div className="input-container"><input id="social-server-setting" type="text" disabled={maintenanceBusy} value={form.socialServerUrl || ''} onChange={e => setForm({ ...form, socialServerUrl: e.target.value })} placeholder="พิมพ์ local เพื่อใช้ในเครื่อง หรือวาง URL ของ Social Server" /></div>
+  return <div className="modal-backdrop" onClick={() => !busy && onClose()}><div className="modal-dialog" role="dialog" aria-modal="true" aria-label="การตั้งค่า Launcher" onClick={e => e.stopPropagation()}>
+    <div className="modal-header"><div className="modal-title">การตั้งค่า Launcher</div><button className="modal-close-btn" disabled={busy} onClick={onClose} aria-label="ปิด">✕</button></div>
+    <form className="modal-body" onSubmit={e => { e.preventDefault(); if (!busy) { onSaveSettings(form); onClose(); } }}>
+      <label htmlFor="fivem-path">ตำแหน่ง FiveM.exe หรือโฟลเดอร์ติดตั้ง (รองรับนอก Drive C:)</label>
+      <div className="input-container"><input id="fivem-path" disabled={busy} value={form.fivemPath} onChange={e => setForm({ ...form, fivemPath: e.target.value })} placeholder="เว้นว่างเพื่อตรวจหาอัตโนมัติ หรือระบุ D:\EstraFiveM\FiveM" /></div>
       <div className="settings-actions" style={{ justifyContent: 'flex-start' }}>
-        <button type="button" className="btn-action-refresh" disabled={maintenanceBusy} onClick={() => setForm(prev => ({ ...prev, socialServerUrl: SUPABASE_SOCIAL_GATEWAY_URL }))}>คืนค่า Estra Online (Supabase)</button>
-        <button type="button" className="btn-action-refresh" disabled={maintenanceBusy} onClick={() => setForm(prev => ({ ...prev, socialServerUrl: LOCAL_SOCIAL_SENTINEL }))}>สลับเป็น Local Mode</button>
+        <button type="button" className="btn-action-refresh" disabled={checking || busy} onClick={checkPath}>{checking ? 'กำลังตรวจ…' : 'ตรวจสอบพาธ'}</button>
+        <button type="button" className="btn-action-refresh" disabled={checking || busy} onClick={detectEnvironment}>ตรวจจับ GTA V &amp; FiveM อัตโนมัติ</button>
+      </div>
+
+      {envInfo && (
+        <div className="env-detect-summary">
+          <div>
+            <strong>GTA V:</strong>{' '}
+            {envInfo.gtav?.found ? `${envInfo.gtav.root} (${envInfo.gtav.source})` : 'ยังไม่พบในระบบ'}
+          </div>
+          <div>
+            <strong>FiveM:</strong>{' '}
+            {envInfo.fivem?.found ? `${envInfo.fivem.root} (${envInfo.fivem.source})` : 'ยังไม่พบ FiveM.exe'}
+          </div>
+        </div>
+      )}
+
+      <details className="configuration-panel patch-template-panel">
+        <summary>
+          <span>ติดตั้ง FiveM ควบคู่กับ Launcher (เลือกไดรฟ์ปลายทางได้)</span>
+        </summary>
+        <div className="patch-template-body">
+          <div className="input-container">
+            <input
+              type="text"
+              aria-label="โฟลเดอร์ติดตั้ง FiveM"
+              disabled={busy}
+              value={installDir}
+              onChange={e => setInstallDir(e.target.value)}
+              placeholder="เช่น D:\EstraFiveM\FiveM"
+            />
+            <button type="button" className="btn-inline-orange" disabled={busy || !installDir.trim()} onClick={installFiveM}>
+              {installingFiveM ? 'กำลังโหลด…' : 'ติดตั้ง FiveM'}
+            </button>
+          </div>
+          <div className="settings-actions" style={{ justifyContent: 'flex-start', marginTop: 8 }}>
+            <button type="button" className="btn-action-refresh" disabled={busy} onClick={() => setInstallDir('D:\\EstraFiveM\\FiveM')}>D:\EstraFiveM\FiveM</button>
+            <button type="button" className="btn-action-refresh" disabled={busy} onClick={() => setInstallDir('E:\\EstraFiveM\\FiveM')}>E:\EstraFiveM\FiveM</button>
+            {envInfo?.suggestedInstallDir && (
+              <button type="button" className="btn-action-refresh" disabled={busy} onClick={() => setInstallDir(envInfo.suggestedInstallDir)}>ค่าแนะนำ</button>
+            )}
+          </div>
+          <small className="help-text">
+            ดาวน์โหลด FiveM.exe ทางการจาก Cfx.re ลงในโฟลเดอร์ที่เลือก (เลือกนอก Drive C: ได้) และบันทึกพาธให้อัตโนมัติ
+          </small>
+        </div>
+      </details>
+
+      <label htmlFor="github-repo-setting">GitHub Repository สำหรับ Auto-Update (owner/repo)</label>
+      <div className="input-container"><input id="github-repo-setting" disabled={busy} value={form.githubRepo || ''} onChange={e => setForm({ ...form, githubRepo: e.target.value })} placeholder="Smallzoamz/5MLauncherEstra" /></div>
+      <label htmlFor="social-server-setting">Social Server URL (ออนไลน์ 100% ผ่าน Supabase Cloud หรือพิมพ์ local)</label>
+      <div className="input-container"><input id="social-server-setting" type="text" disabled={busy} value={form.socialServerUrl || ''} onChange={e => setForm({ ...form, socialServerUrl: e.target.value })} placeholder="พิมพ์ local เพื่อใช้ในเครื่อง หรือวาง URL ของ Social Server" /></div>
+      <div className="settings-actions" style={{ justifyContent: 'flex-start' }}>
+        <button type="button" className="btn-action-refresh" disabled={busy} onClick={() => setForm(prev => ({ ...prev, socialServerUrl: SUPABASE_SOCIAL_GATEWAY_URL }))}>คืนค่า Estra Online (Supabase)</button>
+        <button type="button" className="btn-action-refresh" disabled={busy} onClick={() => setForm(prev => ({ ...prev, socialServerUrl: LOCAL_SOCIAL_SENTINEL }))}>สลับเป็น Local Mode</button>
       </div>
       {[
         ['checkMicBeforeLaunch', 'ตรวจสิทธิ์และเปิดไมโครโฟนก่อนเล่น', 'ตรวจว่าเปิดอุปกรณ์ได้ ส่วนคุณภาพเสียงให้ทดสอบในหน้าเช็คไมค์'],
@@ -44,7 +155,7 @@ export default function SettingsModal({ isOpen, onClose, settings, onSaveSetting
       <button type="button" className="btn-action-refresh" disabled={!activeServer?.gameBuild} onClick={exportIni}>ดาวน์โหลดตัวอย่าง Game Build (.ini)</button>
       {message && <p role="status" className="notice">{message}</p>}
       <MaintenanceSettings fivemPath={form.fivemPath} onBusyChange={value => { setMaintenanceBusy(value); onMaintenanceBusy?.(value); }} />
-      <div className="settings-actions"><button type="button" className="btn-action-refresh" disabled={maintenanceBusy} onClick={onClose}>ยกเลิก</button><button className="btn-action-play" disabled={maintenanceBusy} type="submit">บันทึกการตั้งค่า</button></div>
+      <div className="settings-actions"><button type="button" className="btn-action-refresh" disabled={busy} onClick={onClose}>ยกเลิก</button><button className="btn-action-play" disabled={busy} type="submit">บันทึกการตั้งค่า</button></div>
     </form>
   </div></div>;
 }

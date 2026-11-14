@@ -6,6 +6,7 @@ import {
   LogIn,
   Play,
   Search,
+  Send,
   Sparkles,
   Star,
   UserMinus,
@@ -27,6 +28,7 @@ export default function FriendsSidebar({
   openOnMobile,
   onCloseMobile,
   social,
+  activeServer,
   onOpenAuth,
   onSendFriendRequest,
   onRespondRequest,
@@ -34,6 +36,8 @@ export default function FriendsSidebar({
   onRemoveFriend,
   onSearchUsers,
   onSeedDemoFriends,
+  onInviteFriend,
+  onRespondInvite,
   onJoinFriendServer
 }) {
   const [tab, setTab] = useState('friends');
@@ -42,6 +46,7 @@ export default function FriendsSidebar({
   const [targetInput, setTargetInput] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [feedback, setFeedback] = useState(null);
+  const [inviteNotice, setInviteNotice] = useState(null);
   const [busy, setBusy] = useState(false);
   const [favOpen, setFavOpen] = useState(true);
   const [friendsOpen, setFriendsOpen] = useState(true);
@@ -50,6 +55,7 @@ export default function FriendsSidebar({
   const friends = social?.friends || [];
   const incoming = social?.incomingRequests || [];
   const outgoing = social?.outgoingRequests || [];
+  const incomingInvites = social?.incomingInvites || [];
 
   useEffect(() => {
     if (!showAddForm || !user || targetInput.trim().length < 2) {
@@ -246,6 +252,51 @@ export default function FriendsSidebar({
 
           {tab === 'friends' ? (
             <div className="friends-scroll-body">
+              {inviteNotice?.error && <p className="friends-mini-msg error">{inviteNotice.error}</p>}
+              {inviteNotice?.ok && <p className="friends-mini-msg ok">{inviteNotice.ok}</p>}
+
+              {incomingInvites.length > 0 && (
+                <div className="friends-group">
+                  <div className="friends-group-static">
+                    <span>คำชวนเล่นด้วยกัน</span>
+                    <span className="friends-count-pill">{incomingInvites.length}</span>
+                  </div>
+                  <ul className="friends-list">
+                    {incomingInvites.map(inv => (
+                      <li key={inv.id} className="friend-request-row friend-invite-row">
+                        <div className="friend-avatar" style={{ background: inv.fromUser?.avatarColor || '#2b6bf3' }}>
+                          {(inv.fromUser?.displayName || 'FR').slice(0, 2).toUpperCase()}
+                        </div>
+                        <div className="friend-meta">
+                          <strong>{inv.fromUser?.displayName || 'เพื่อน'}</strong>
+                          <small title={inv.server?.name}>ชวนเล่น {inv.server?.name}</small>
+                        </div>
+                        <div className="request-actions">
+                          <button
+                            type="button"
+                            className="req-accept"
+                            title={`เข้าร่วมเมือง ${inv.server?.name}`}
+                            aria-label={`รับคำชวนเข้าเมือง ${inv.server?.name}`}
+                            onClick={() => onRespondInvite?.(inv.id, 'accept', inv.server)}
+                          >
+                            <Play size={13} fill="currentColor" />
+                          </button>
+                          <button
+                            type="button"
+                            className="req-decline"
+                            title="ปฏิเสธคำชวน"
+                            aria-label={`ปฏิเสธคำชวนจาก ${inv.fromUser?.displayName || 'เพื่อน'}`}
+                            onClick={() => onRespondInvite?.(inv.id, 'decline')}
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               <div className="friends-group">
                 <button
                   type="button"
@@ -266,9 +317,20 @@ export default function FriendsSidebar({
                         <FriendRow
                           key={friend.id}
                           friend={friend}
+                          canInvite={!!activeServer?.ip && !friend.isDemo && friend.presence !== 'offline' && typeof onInviteFriend === 'function'}
+                          activeServerName={activeServer?.name}
                           onToggleFavorite={() => onToggleFavoriteFriend(friend.id, !friend.isFavorite)}
                           onRemove={() => onRemoveFriend(friend.id)}
                           onJoin={() => friend.currentServer && onJoinFriendServer(friend.currentServer)}
+                          onInvite={async () => {
+                            setInviteNotice(null);
+                            try {
+                              const r = await onInviteFriend(friend.id, activeServer);
+                              setInviteNotice({ ok: r?.message || `ส่งคำชวนไปยัง ${friend.displayName} แล้ว` });
+                            } catch (err) {
+                              setInviteNotice({ error: err.message });
+                            }
+                          }}
                         />
                       ))}
                     </ul>
@@ -298,9 +360,20 @@ export default function FriendsSidebar({
                         <FriendRow
                           key={friend.id}
                           friend={friend}
+                          canInvite={!!activeServer?.ip && !friend.isDemo && friend.presence !== 'offline' && typeof onInviteFriend === 'function'}
+                          activeServerName={activeServer?.name}
                           onToggleFavorite={() => onToggleFavoriteFriend(friend.id, !friend.isFavorite)}
                           onRemove={() => onRemoveFriend(friend.id)}
                           onJoin={() => friend.currentServer && onJoinFriendServer(friend.currentServer)}
+                          onInvite={async () => {
+                            setInviteNotice(null);
+                            try {
+                              const r = await onInviteFriend(friend.id, activeServer);
+                              setInviteNotice({ ok: r?.message || `ส่งคำชวนไปยัง ${friend.displayName} แล้ว` });
+                            } catch (err) {
+                              setInviteNotice({ error: err.message });
+                            }
+                          }}
                         />
                       ))}
                     </ul>
@@ -416,7 +489,7 @@ export default function FriendsSidebar({
   );
 }
 
-function FriendRow({ friend, onToggleFavorite, onRemove, onJoin }) {
+function FriendRow({ friend, canInvite, activeServerName, onToggleFavorite, onRemove, onJoin, onInvite }) {
   return (
     <li className={`friend-row ${friend.presence}`}>
       <div className="friend-avatar" style={{ background: friend.avatarColor || '#2b6bf3' }}>
@@ -435,11 +508,22 @@ function FriendRow({ friend, onToggleFavorite, onRemove, onJoin }) {
           <button
             type="button"
             className="friend-game-badge"
-            title={`เลือกเมือง ${friend.currentServer.name}`}
+            title={`ตามเพื่อนไปยัง ${friend.currentServer.name}`}
             aria-label={`ตามเพื่อนไปยัง ${friend.currentServer.name}`}
             onClick={onJoin}
           >
             <Play size={11} fill="currentColor" />
+          </button>
+        )}
+        {canInvite && (
+          <button
+            type="button"
+            className="friend-invite-btn"
+            title={`ชวน ${friend.displayName} เข้าเล่น ${activeServerName || 'เมืองนี้'}`}
+            aria-label={`ชวน ${friend.displayName} เล่นด้วยกัน`}
+            onClick={onInvite}
+          >
+            <Send size={12} />
           </button>
         )}
         <button

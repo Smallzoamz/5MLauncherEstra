@@ -40,6 +40,8 @@ export function subscribeSocialRealtime({ accessToken, userId, socialServerUrl, 
     .on('postgres_changes', { event: '*', schema: 'public', table: 'launcher_friend_requests', filter: `to_user_id=eq.${userId}` }, triggerRefresh)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'launcher_friend_requests', filter: `from_user_id=eq.${userId}` }, triggerRefresh)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'launcher_favorite_servers', filter: `user_id=eq.${userId}` }, triggerRefresh)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'launcher_game_invites', filter: `to_user_id=eq.${userId}` }, triggerRefresh)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'launcher_game_invites', filter: `from_user_id=eq.${userId}` }, triggerRefresh)
     .subscribe();
 
   return () => {

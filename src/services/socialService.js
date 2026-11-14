@@ -61,3 +61,11 @@ export async function searchSocialUsers(query, socialServerUrl) {
 export async function seedDemoFriends(socialServerUrl) {
   return apiPost('/api/social/demo-seed', {}, socialHeaders(socialServerUrl));
 }
+
+export async function sendGameInvite(friendId, server, socialServerUrl) {
+  return apiPost('/api/social/game-invite', { friendId, server }, socialHeaders(socialServerUrl));
+}
+
+export async function respondGameInvite(inviteId, action, socialServerUrl) {
+  return apiPost('/api/social/game-invite-respond', { inviteId, action }, socialHeaders(socialServerUrl));
+}

@@ -836,3 +836,404 @@ pub fn execute_real_clean_cache(fivem_path: &str) -> Result<CleanCacheResult, St
         },
     })
 }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedGamePath {
+    pub found: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exe: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    pub on_system_drive: bool,
+}
+
+impl DetectedGamePath {
+    fn missing() -> Self {
+        Self {
+            found: false,
+            root: None,
+            exe: None,
+            source: None,
+            on_system_drive: false,
+        }
+    }
+
+    fn from_dir(dir: PathBuf, exe_name: &str, source: &str) -> Option<Self> {
+        let exe_path = dir.join(exe_name);
+        if !fs::metadata(&exe_path).map(|m| m.is_file()).unwrap_or(false) {
+            return None;
+        }
+        let canonical = fs::canonicalize(&dir).unwrap_or(dir);
+        let root = normalize_win_path(&canonical);
+        let exe = root.join(exe_name);
+        let on_system_drive = root
+            .to_string_lossy()
+            .get(0..2)
+            .map(|p| p.eq_ignore_ascii_case("c:"))
+            .unwrap_or(false);
+        Some(Self {
+            found: true,
+            root: Some(root),
+            exe: Some(exe),
+            source: Some(source.to_string()),
+            on_system_drive,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameEnvironmentReport {
+    pub success: bool,
+    pub gtav: DetectedGamePath,
+    pub fivem: DetectedGamePath,
+    pub suggested_install_dir: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launcher_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallFiveMResult {
+    pub success: bool,
+    pub already_installed: bool,
+    pub root: PathBuf,
+    pub exe: PathBuf,
+    pub gtav: DetectedGamePath,
+    pub message: String,
+}
+
+#[cfg(windows)]
+fn read_reg_str(root: winreg::HKEY, subkey: &str, value_name: &str) -> Option<String> {
+    let key = winreg::RegKey::predef(root).open_subkey(subkey).ok()?;
+    let val: String = key.get_value(value_name).ok()?;
+    let trimmed = val.trim().trim_matches('"').to_string();
+    if trimmed.is_empty() { None } else { Some(trimmed) }
+}
+
+#[cfg(not(windows))]
+fn read_reg_str(_root: isize, _subkey: &str, _value_name: &str) -> Option<String> {
+    None
+}
+
+fn extract_exe_dir_from_cmd(raw: &str, exe_name: &str) -> Option<PathBuf> {
+    let lower = raw.to_ascii_lowercase();
+    let idx = lower.find(&exe_name.to_ascii_lowercase())?;
+    let end = idx + exe_name.len();
+    let slice = &raw[..end];
+    let start = slice.rfind('"').map(|i| i + 1).unwrap_or(0);
+    let candidate = PathBuf::from(slice[start..].trim());
+    candidate.parent().map(|p| p.to_path_buf())
+}
+
+fn scan_steam_library_gtav() -> Option<(PathBuf, &'static str)> {
+    #[cfg(windows)]
+    {
+        use winreg::enums::HKEY_LOCAL_MACHINE;
+        if let Some(loc) = read_reg_str(
+            HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 271590",
+            "InstallLocation",
+        )
+        .or_else(|| {
+            read_reg_str(
+                HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 271590",
+                "InstallLocation",
+            )
+        }) {
+            return Some((PathBuf::from(loc), "Steam Registry"));
+        }
+
+        if let Some(steam_path) = read_reg_str(HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath")
+            .or_else(|| read_reg_str(HKEY_LOCAL_MACHINE, r"SOFTWARE\Valve\Steam", "InstallPath"))
+        {
+            let steam_root = PathBuf::from(&steam_path);
+            let direct = steam_root.join("steamapps").join("common").join("Grand Theft Auto V");
+            if direct.join("GTA5.exe").is_file() {
+                return Some((direct, "Steam Library"));
+            }
+            let vdf = steam_root.join("steamapps").join("libraryfolders.vdf");
+            if let Ok(content) = fs::read_to_string(vdf) {
+                static PATH_RE: OnceLock<Regex> = OnceLock::new();
+                let re = PATH_RE.get_or_init(|| Regex::new(r#""path"\s+"([^"]+)""#).unwrap());
+                for caps in re.captures_iter(&content) {
+                    let lib = caps[1].replace("\\\\", "\\");
+                    let cand = PathBuf::from(lib).join("steamapps").join("common").join("Grand Theft Auto V");
+                    if cand.join("GTA5.exe").is_file() {
+                        return Some((cand, "Steam Library"));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn scan_epic_gtav() -> Option<(PathBuf, &'static str)> {
+    let program_data = std::env::var_os("PROGRAMDATA").map(PathBuf::from)?;
+    let manifests = program_data.join("Epic").join("EpicGamesLauncher").join("Data").join("Manifests");
+    let entries = fs::read_dir(manifests).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("item") {
+            continue;
+        }
+        if let Ok(raw) = fs::read_to_string(&path) {
+            if let Ok(json) = serde_json::from_str::<Value>(&raw) {
+                if let Some(loc) = json["InstallLocation"].as_str() {
+                    let dir = PathBuf::from(loc);
+                    if dir.join("GTA5.exe").is_file() {
+                        return Some((dir, "Epic Games"));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn detect_gtav(fivem_root: Option<&PathBuf>) -> DetectedGamePath {
+    if let Some((dir, src)) = scan_steam_library_gtav() {
+        if let Some(found) = DetectedGamePath::from_dir(dir, "GTA5.exe", src) {
+            return found;
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use winreg::enums::HKEY_LOCAL_MACHINE;
+        for sub in [
+            r"SOFTWARE\WOW6432Node\Rockstar Games\Grand Theft Auto V",
+            r"SOFTWARE\Rockstar Games\Grand Theft Auto V",
+        ] {
+            if let Some(folder) = read_reg_str(HKEY_LOCAL_MACHINE, sub, "InstallFolder") {
+                if let Some(found) = DetectedGamePath::from_dir(PathBuf::from(folder), "GTA5.exe", "Rockstar Launcher") {
+                    return found;
+                }
+            }
+        }
+    }
+
+    if let Some((dir, src)) = scan_epic_gtav() {
+        if let Some(found) = DetectedGamePath::from_dir(dir, "GTA5.exe", src) {
+            return found;
+        }
+    }
+
+    if let Some(root) = fivem_root {
+        let ini = root.join("FiveM.app").join("CitizenFX.ini");
+        if let Ok(raw) = fs::read_to_string(ini) {
+            for line in raw.lines() {
+                let trimmed = line.trim();
+                if let Some((k, v)) = trimmed.split_once('=') {
+                    if k.trim().eq_ignore_ascii_case("IVPath") {
+                        if let Some(found) = DetectedGamePath::from_dir(PathBuf::from(v.trim()), "GTA5.exe", "CitizenFX.ini") {
+                            return found;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for drive in ['D', 'E', 'F', 'G', 'C'] {
+        for rel in [
+            "Grand Theft Auto V",
+            "Games\\Grand Theft Auto V",
+            "Games\\GTAV",
+            "SteamLibrary\\steamapps\\common\\Grand Theft Auto V",
+            "Program Files (x86)\\Steam\\steamapps\\common\\Grand Theft Auto V",
+            "Program Files\\Epic Games\\GTAV",
+            "Program Files\\Rockstar Games\\Grand Theft Auto V",
+        ] {
+            let cand = PathBuf::from(format!("{drive}:\\{rel}"));
+            if let Some(found) = DetectedGamePath::from_dir(cand, "GTA5.exe", "Drive Scan") {
+                return found;
+            }
+        }
+    }
+
+    DetectedGamePath::missing()
+}
+
+fn detect_fivem(current_fivem_path: &str, launcher_dir: Option<&PathBuf>) -> DetectedGamePath {
+    if !current_fivem_path.trim().is_empty() {
+        if let Ok(inst) = resolve_installation(current_fivem_path) {
+            if let Some(found) = DetectedGamePath::from_dir(inst.root, "FiveM.exe", "การตั้งค่า Launcher") {
+                return found;
+            }
+        }
+    }
+
+    if let Some(ldir) = launcher_dir {
+        for cand in [ldir.join("FiveM"), ldir.to_path_buf(), ldir.parent().map(|p| p.join("FiveM")).unwrap_or_default()] {
+            if !cand.as_os_str().is_empty() {
+                if let Some(found) = DetectedGamePath::from_dir(cand, "FiveM.exe", "โฟลเดอร์เดียวกับ Launcher") {
+                    return found;
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use winreg::enums::HKEY_CURRENT_USER;
+        if let Some(cmd) = read_reg_str(HKEY_CURRENT_USER, r"Software\Classes\fivem\shell\open\command", "") {
+            if let Some(dir) = extract_exe_dir_from_cmd(&cmd, "FiveM.exe") {
+                if let Some(found) = DetectedGamePath::from_dir(dir, "FiveM.exe", "Windows Registry") {
+                    return found;
+                }
+            }
+        }
+    }
+
+    if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        if let Some(found) = DetectedGamePath::from_dir(local.join("FiveM"), "FiveM.exe", "LocalAppData (C:)") {
+            return found;
+        }
+    }
+
+    for drive in ['D', 'E', 'F', 'G', 'C'] {
+        for rel in [
+            "FiveM",
+            "EstraFiveM\\FiveM",
+            "EstraLauncher\\FiveM",
+            "Games\\FiveM",
+        ] {
+            let cand = PathBuf::from(format!("{drive}:\\{rel}"));
+            if let Some(found) = DetectedGamePath::from_dir(cand, "FiveM.exe", "Drive Scan") {
+                return found;
+            }
+        }
+    }
+
+    DetectedGamePath::missing()
+}
+
+pub fn detect_game_environment(current_fivem_path: &str) -> GameEnvironmentReport {
+    let launcher_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(normalize_win_path));
+    let fivem = detect_fivem(current_fivem_path, launcher_dir.as_ref());
+    let gtav = detect_gtav(fivem.root.as_ref());
+
+    let suggested_install_dir = if let Some(ref ldir) = launcher_dir {
+        let on_c = ldir.to_string_lossy().get(0..2).map(|s| s.eq_ignore_ascii_case("c:")).unwrap_or(false);
+        if !on_c {
+            ldir.join("FiveM")
+        } else {
+            ['D', 'E', 'F']
+                .iter()
+                .map(|d| PathBuf::from(format!("{d}:\\")))
+                .find(|root| root.exists())
+                .map(|root| root.join("EstraFiveM").join("FiveM"))
+                .unwrap_or_else(|| {
+                    std::env::var_os("LOCALAPPDATA")
+                        .map(|l| PathBuf::from(l).join("FiveM"))
+                        .unwrap_or_else(|| PathBuf::from(r"C:\FiveM"))
+                })
+        }
+    } else {
+        ['D', 'E', 'F']
+            .iter()
+            .map(|d| PathBuf::from(format!("{d}:\\")))
+            .find(|root| root.exists())
+            .map(|root| root.join("EstraFiveM").join("FiveM"))
+            .unwrap_or_else(|| {
+                std::env::var_os("LOCALAPPDATA")
+                    .map(|l| PathBuf::from(l).join("FiveM"))
+                    .unwrap_or_else(|| PathBuf::from(r"C:\FiveM"))
+            })
+    };
+
+    GameEnvironmentReport {
+        success: true,
+        gtav,
+        fivem,
+        suggested_install_dir,
+        launcher_dir,
+    }
+}
+
+pub async fn install_fivem_bootstrap(target_dir: &str) -> Result<InstallFiveMResult, String> {
+    let raw = target_dir.trim();
+    if raw.is_empty() || raw.len() > 512 || raw.bytes().any(|b| b < 0x20) {
+        return Err("กรุณาระบุโฟลเดอร์ปลายทางสำหรับติดตั้ง FiveM".into());
+    }
+    let expanded = expand_env_vars(raw);
+    let target = PathBuf::from(&expanded);
+    if !target.is_absolute() {
+        return Err("โฟลเดอร์ปลายทางต้องเป็นพาธแบบเต็ม (เช่น D:\\EstraFiveM\\FiveM)".into());
+    }
+    let lower = target.to_string_lossy().to_ascii_lowercase();
+    for forbidden in ["\\windows", "\\program files", "\\program files (x86)", "\\programdata"] {
+        if lower.contains(forbidden) {
+            return Err("ไม่อนุญาตให้ติดตั้ง FiveM ในโฟลเดอร์ระบบ Windows".into());
+        }
+    }
+
+    assert_no_links(&target)?;
+    fs::create_dir_all(&target).map_err(|e| format!("สร้างโฟลเดอร์ติดตั้งไม่ได้: {e}"))?;
+    let canonical = fs::canonicalize(&target).map_err(|e| format!("เข้าถึงโฟลเดอร์ไม่ได้: {e}"))?;
+    let root = normalize_win_path(&canonical);
+    let exe = root.join("FiveM.exe");
+
+    if fs::metadata(&exe).map(|m| m.is_file()).unwrap_or(false) {
+        let gtav = detect_gtav(Some(&root));
+        return Ok(InstallFiveMResult {
+            success: true,
+            already_installed: true,
+            root,
+            exe,
+            gtav,
+            message: "พบ FiveM.exe ในโฟลเดอร์นี้แล้ว และเชื่อมต่อพาธเรียบร้อย".into(),
+        });
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .user_agent("EstraFiveMLauncher/2.1.1")
+        .build()
+        .map_err(|e| format!("สร้างตัวดาวน์โหลดไม่สำเร็จ: {e}"))?;
+    let resp = client
+        .get("https://runtime.fivem.net/client/FiveM.exe")
+        .send()
+        .await
+        .map_err(|e| format!("ดาวน์โหลด FiveM.exe จาก Cfx.re ไม่สำเร็จ: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("ดาวน์โหลด FiveM.exe ไม่สำเร็จ (HTTP {})", resp.status().as_u16()));
+    }
+
+    let tmp_path = root.join("FiveM.exe.tmp");
+    let mut stream = resp.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("รับข้อมูล FiveM.exe ไม่สมบูรณ์: {e}"))?;
+        if bytes.len() + chunk.len() > 40 * 1024 * 1024 {
+            return Err("ขนาดไฟล์ FiveM.exe เกินขีดจำกัดที่กำหนด".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.len() < 1_000_000 || &bytes[..2] != b"MZ" {
+        return Err("ไฟล์ FiveM.exe ที่ดาวน์โหลดมาไม่ถูกต้อง กรุณาลองใหม่".into());
+    }
+    fs::write(&tmp_path, &bytes).map_err(|e| format!("บันทึกไฟล์ FiveM.exe ไม่สำเร็จ: {e}"))?;
+    fs::rename(&tmp_path, &exe).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        format!("ย้ายไฟล์ FiveM.exe ไม่สำเร็จ: {e}")
+    })?;
+
+    let gtav = detect_gtav(Some(&root));
+    Ok(InstallFiveMResult {
+        success: true,
+        already_installed: false,
+        root,
+        exe,
+        gtav,
+        message: "ดาวน์โหลดและติดตั้ง FiveM.exe สำเร็จแล้ว (สามารถเปิดเล่นได้ทันที — FiveM จะดาวน์โหลดแคชเพิ่มในครั้งแรก)".into(),
+    })
+}

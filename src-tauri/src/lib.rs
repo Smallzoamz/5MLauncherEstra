@@ -8,8 +8,9 @@ pub mod session;
 pub mod social;
 
 use crate::fivem::{
-    execute_real_clean_cache, query_live_server, resolve_installation, CleanCacheResult,
-    FiveMInstallation, LaunchRequest, LaunchResult, LiveServerInfo,
+    detect_game_environment, execute_real_clean_cache, install_fivem_bootstrap, query_live_server,
+    resolve_installation, CleanCacheResult, FiveMInstallation, GameEnvironmentReport,
+    InstallFiveMResult, LaunchRequest, LaunchResult, LiveServerInfo,
 };
 use crate::maintenance::{
     clean_maintenance, preview_maintenance, CleanMaintenanceRequest, MaintenanceCleanResult,
@@ -74,6 +75,25 @@ async fn resolve_installation_cmd(path: String) -> Result<FiveMInstallation, Str
     tokio::task::spawn_blocking(move || resolve_installation(&path))
         .await
         .map_err(|_| "ตรวจสอบพาธ FiveM ไม่สำเร็จ".to_string())?
+}
+
+#[tauri::command]
+async fn detect_game_environment_cmd(path: String) -> Result<GameEnvironmentReport, String> {
+    tokio::task::spawn_blocking(move || detect_game_environment(&path))
+        .await
+        .map_err(|_| "ตรวจหา GTA V และ FiveM ไม่สำเร็จ".to_string())
+}
+
+#[tauri::command]
+async fn install_fivem_bootstrap_cmd(
+    state: State<'_, AppState>,
+    target_dir: String,
+) -> Result<InstallFiveMResult, String> {
+    let _guard = state
+        .mutation_lock
+        .try_lock()
+        .map_err(|_| "มีคำสั่งกำลังทำงาน กรุณารอสักครู่".to_string())?;
+    install_fivem_bootstrap(&target_dir).await
 }
 
 #[tauri::command]
@@ -338,6 +358,8 @@ pub fn run() {
             get_system_presence_cmd,
             query_server_cmd,
             resolve_installation_cmd,
+            detect_game_environment_cmd,
+            install_fivem_bootstrap_cmd,
             launch_fivem_cmd,
             clean_cache_cmd,
             preview_maintenance_cmd,

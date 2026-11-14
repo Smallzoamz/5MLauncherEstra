@@ -1,5 +1,7 @@
 import { launchThroughExplorer } from './windowsShell.js';
 import fs from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import path from 'node:path';
 import { parseTarget } from '../shared/target.js';
 import { getProcessNames, isFiveMProcess } from './systemPresence.js';
@@ -178,5 +180,208 @@ export async function executeRealCleanCache(options = {}, dependencies = {}) {
     catch (error) { errors.push(`${target.name}: ${error.code || 'ลบไม่สำเร็จ'}`); }
   }
   return { success: errors.length === 0, steps, error: errors.join('; ') || undefined };
+}
+
+const execFileAsync = promisify(execFile);
+
+async function queryWindowsRegistryValue(keyPath, valueName) {
+  try {
+    const args = valueName ? ['query', keyPath, '/v', valueName] : ['query', keyPath, '/ve'];
+    const { stdout } = await execFileAsync('reg.exe', args, { timeout: 2500, windowsHide: true });
+    const line = stdout.split(/\r?\n/).find(l => /\bREG_(SZ|EXPAND_SZ)\b/i.test(l));
+    if (!line) return '';
+    return line.replace(/^.*?\bREG_(?:SZ|EXPAND_SZ)\b\s*/i, '').trim().replace(/^"|"$/g, '');
+  } catch {
+    return '';
+  }
+}
+
+async function checkGameDir(dir, exeName, source) {
+  if (!dir) return null;
+  try {
+    const root = await fs.realpath(dir);
+    const exe = path.join(root, exeName);
+    const stat = await fs.stat(exe).catch(() => null);
+    if (!stat?.isFile()) return null;
+    return {
+      found: true,
+      root,
+      exe,
+      source,
+      onSystemDrive: /^c:/i.test(root)
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function detectGameEnvironment(currentFivemPath = '', env = process.env, dependencies = {}) {
+  const regQuery = dependencies.queryRegistry || queryWindowsRegistryValue;
+  const fivemCandidates = [];
+  if (typeof currentFivemPath === 'string' && currentFivemPath.trim()) {
+    try {
+      const resolved = await resolveInstallation(currentFivemPath, env);
+      fivemCandidates.push({ dir: resolved.root, source: 'การตั้งค่า Launcher' });
+    } catch {}
+  }
+
+  const exeDir = path.dirname(process.execPath);
+  fivemCandidates.push(
+    { dir: path.join(process.cwd(), 'FiveM'), source: 'โฟลเดอร์เดียวกับ Launcher' },
+    { dir: path.join(exeDir, 'FiveM'), source: 'โฟลเดอร์เดียวกับ Launcher' }
+  );
+
+  if (process.platform === 'win32') {
+    const fivemCmd = await regQuery('HKCU\\Software\\Classes\\fivem\\shell\\open\\command', '');
+    const m = /"([^"]*FiveM\.exe)"|([^\s"]*FiveM\.exe)/i.exec(fivemCmd || '');
+    if (m) fivemCandidates.push({ dir: path.dirname(m[1] || m[2]), source: 'Windows Registry' });
+  }
+  if (env.LOCALAPPDATA) fivemCandidates.push({ dir: path.join(env.LOCALAPPDATA, 'FiveM'), source: 'LocalAppData (C:)' });
+  for (const drive of ['D', 'E', 'F', 'G', 'C']) {
+    for (const rel of ['FiveM', 'EstraFiveM\\FiveM', 'EstraLauncher\\FiveM', 'Games\\FiveM']) {
+      fivemCandidates.push({ dir: `${drive}:\\${rel}`, source: 'Drive Scan' });
+    }
+  }
+
+  let fivem = { found: false, onSystemDrive: false };
+  for (const cand of fivemCandidates) {
+    const hit = await checkGameDir(cand.dir, 'FiveM.exe', cand.source);
+    if (hit) {
+      fivem = hit;
+      break;
+    }
+  }
+
+  const gtavCandidates = [];
+  if (process.platform === 'win32') {
+    for (const [k, v, src] of [
+      ['HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Steam App 271590', 'InstallLocation', 'Steam Registry'],
+      ['HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Steam App 271590', 'InstallLocation', 'Steam Registry'],
+      ['HKLM\\SOFTWARE\\WOW6432Node\\Rockstar Games\\Grand Theft Auto V', 'InstallFolder', 'Rockstar Launcher'],
+      ['HKLM\\SOFTWARE\\Rockstar Games\\Grand Theft Auto V', 'InstallFolder', 'Rockstar Launcher']
+    ]) {
+      const val = await regQuery(k, v);
+      if (val) gtavCandidates.push({ dir: val, source: src });
+    }
+
+    const steamPath = await regQuery('HKLM\\SOFTWARE\\WOW6432Node\\Valve\\Steam', 'InstallPath')
+      || await regQuery('HKLM\\SOFTWARE\\Valve\\Steam', 'InstallPath');
+    if (steamPath) {
+      gtavCandidates.push({ dir: path.join(steamPath, 'steamapps', 'common', 'Grand Theft Auto V'), source: 'Steam Library' });
+      const vdf = await fs.readFile(path.join(steamPath, 'steamapps', 'libraryfolders.vdf'), 'utf8').catch(() => '');
+      for (const match of vdf.matchAll(/"path"\s+"([^"]+)"/g)) {
+        gtavCandidates.push({
+          dir: path.join(match[1].replace(/\\\\/g, '\\'), 'steamapps', 'common', 'Grand Theft Auto V'),
+          source: 'Steam Library'
+        });
+      }
+    }
+
+    if (env.PROGRAMDATA) {
+      const manifestsDir = path.join(env.PROGRAMDATA, 'Epic', 'EpicGamesLauncher', 'Data', 'Manifests');
+      const items = await fs.readdir(manifestsDir).catch(() => []);
+      for (const item of items.filter(n => n.endsWith('.item'))) {
+        try {
+          const parsed = JSON.parse(await fs.readFile(path.join(manifestsDir, item), 'utf8'));
+          if (parsed?.InstallLocation) gtavCandidates.push({ dir: parsed.InstallLocation, source: 'Epic Games' });
+        } catch {}
+      }
+    }
+  }
+
+  if (fivem.root) {
+    const ini = await fs.readFile(path.join(fivem.root, 'FiveM.app', 'CitizenFX.ini'), 'utf8').catch(() => '');
+    const ivLine = ini.split(/\r?\n/).find(l => /^\s*IVPath\s*=/.test(l));
+    if (ivLine) gtavCandidates.push({ dir: ivLine.split('=').slice(1).join('=').trim(), source: 'CitizenFX.ini' });
+  }
+
+  for (const drive of ['D', 'E', 'F', 'G', 'C']) {
+    for (const rel of [
+      'Grand Theft Auto V',
+      'Games\\Grand Theft Auto V',
+      'Games\\GTAV',
+      'SteamLibrary\\steamapps\\common\\Grand Theft Auto V',
+      'Program Files (x86)\\Steam\\steamapps\\common\\Grand Theft Auto V',
+      'Program Files\\Epic Games\\GTAV',
+      'Program Files\\Rockstar Games\\Grand Theft Auto V'
+    ]) {
+      gtavCandidates.push({ dir: `${drive}:\\${rel}`, source: 'Drive Scan' });
+    }
+  }
+
+  let gtav = { found: false, onSystemDrive: false };
+  for (const cand of gtavCandidates) {
+    const hit = await checkGameDir(cand.dir, 'GTA5.exe', cand.source);
+    if (hit) {
+      gtav = hit;
+      break;
+    }
+  }
+
+  let suggestedInstallDir = env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, 'FiveM') : 'D:\\EstraFiveM\\FiveM';
+  for (const drive of ['D', 'E', 'F']) {
+    if ((await fs.stat(`${drive}:\\`).catch(() => null))?.isDirectory()) {
+      suggestedInstallDir = `${drive}:\\EstraFiveM\\FiveM`;
+      break;
+    }
+  }
+
+  return { success: true, gtav, fivem, suggestedInstallDir };
+}
+
+export async function installFiveMBootstrap(options = {}, dependencies = {}) {
+  const env = dependencies.env || process.env;
+  const raw = typeof options.targetDir === 'string' ? options.targetDir.trim() : '';
+  if (!raw || raw.length > 512 || /[\x00-\x1f]/.test(raw)) {
+    throw new Error('กรุณาระบุโฟลเดอร์ปลายทางสำหรับติดตั้ง FiveM');
+  }
+  const expanded = raw.replace(/%([a-z_]+)%/gi, (_, name) => env[name.toUpperCase()] || `%${name}%`);
+  if (!path.isAbsolute(expanded)) {
+    throw new Error('โฟลเดอร์ปลายทางต้องเป็นพาธแบบเต็ม (เช่น D:\\EstraFiveM\\FiveM)');
+  }
+  const lower = expanded.toLowerCase();
+  if (['\\windows', '\\program files', '\\program files (x86)', '\\programdata'].some(b => lower.includes(b))) {
+    throw new Error('ไม่อนุญาตให้ติดตั้ง FiveM ในโฟลเดอร์ระบบ Windows');
+  }
+
+  await assertNoLinks(expanded);
+  await fs.mkdir(expanded, { recursive: true });
+  const root = await fs.realpath(expanded);
+  const exe = path.join(root, 'FiveM.exe');
+  if ((await fs.stat(exe).catch(() => null))?.isFile()) {
+    const envReport = await detectGameEnvironment(root, env, dependencies);
+    return {
+      success: true,
+      alreadyInstalled: true,
+      root,
+      exe,
+      gtav: envReport.gtav,
+      message: 'พบ FiveM.exe ในโฟลเดอร์นี้แล้ว และเชื่อมต่อพาธเรียบร้อย'
+    };
+  }
+
+  const fetchImpl = dependencies.fetch || fetch;
+  const resp = await fetchImpl('https://runtime.fivem.net/client/FiveM.exe', {
+    signal: AbortSignal.timeout(90000),
+    headers: { 'User-Agent': 'EstraFiveMLauncher/2.1.1' }
+  });
+  if (!resp.ok) throw new Error(`ดาวน์โหลด FiveM.exe ไม่สำเร็จ (HTTP ${resp.status})`);
+  const buf = Buffer.from(await resp.arrayBuffer());
+  if (buf.length < 1_000_000 || buf.length > 40 * 1024 * 1024 || buf[0] !== 0x4d || buf[1] !== 0x5a) {
+    throw new Error('ไฟล์ FiveM.exe ที่ดาวน์โหลดมาไม่ถูกต้อง กรุณาลองใหม่');
+  }
+  const tmp = path.join(root, 'FiveM.exe.tmp');
+  await fs.writeFile(tmp, buf);
+  await fs.rename(tmp, exe);
+
+  const envReport = await detectGameEnvironment(root, env, dependencies);
+  return {
+    success: true,
+    alreadyInstalled: false,
+    root,
+    exe,
+    gtav: envReport.gtav,
+    message: 'ดาวน์โหลดและติดตั้ง FiveM.exe สำเร็จแล้ว (สามารถเปิดเล่นได้ทันที — FiveM จะโหลดไฟล์เสริมในครั้งแรก)'
+  };
 }
 

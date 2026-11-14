@@ -977,6 +977,18 @@ h1 > span { display: block; }
   place-items: center;
 }
 .friend-game-badge:hover { background: var(--accent-cobalt); color: #fff; }
+.friend-invite-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  border: 0;
+  background: rgba(16, 185, 129, 0.16);
+  color: #6ee7b7;
+  display: grid;
+  place-items: center;
+}
+.friend-invite-btn:hover { background: #10b981; color: #06281e; }
+.friend-invite-row { background: rgba(43, 107, 243, 0.08); border-radius: 10px; }
 .friend-star-btn, .friend-remove-btn {
   width: 24px;
   height: 24px;
@@ -1293,6 +1305,48 @@ h1 > span { display: block; }
   .prelaunch-repo-chip { margin-left: 0; }
   .prelaunch-dock { padding: 14px; }
 }
+
+.env-detect-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+.env-detect-summary strong { color: var(--text-bright); }
+
+.game-invite-toast {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(400px, calc(100vw - 24px));
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(13, 21, 41, 0.96);
+  border: 1px solid rgba(59, 130, 246, 0.42);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.48);
+  backdrop-filter: blur(12px);
+}
+.game-invite-toast-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.game-invite-toast-meta strong { font-size: 12px; color: var(--text-bright); }
+.game-invite-toast-meta small { font-size: 11px; color: #93c5fd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.game-invite-toast-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.game-invite-toast-actions .req-decline { width: auto; height: 28px; padding: 0 10px; font-size: 11px; font-weight: 600; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *:before, *:after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }

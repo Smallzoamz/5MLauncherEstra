@@ -43,6 +43,9 @@ async function tauriGet(url, headers = {}) {
     const res = await invokeTauri('resolve_installation_cmd', { path: parsed.searchParams.get('path') || '' });
     return { success: true, ...res };
   }
+  if (parsed.pathname === '/api/game-environment') {
+    return invokeTauri('detect_game_environment_cmd', { path: parsed.searchParams.get('path') || '' });
+  }
   if (parsed.pathname === '/api/maintenance-preview') {
     return invokeTauri('preview_maintenance_cmd', { fivemPath: parsed.searchParams.get('path') || '' });
   }
@@ -60,6 +63,7 @@ async function tauriPost(url, body = {}, headers = {}) {
     });
   }
   if (parsed.pathname === '/api/launch-fivem') return invokeTauri('launch_fivem_cmd', { request: body });
+  if (parsed.pathname === '/api/install-fivem') return invokeTauri('install_fivem_bootstrap_cmd', { targetDir: body.targetDir || '' });
   if (parsed.pathname === '/api/clean-cache') return invokeTauri('clean_cache_cmd', { fivemPath: body.fivemPath || '' });
   if (parsed.pathname === '/api/clean-maintenance') return invokeTauri('clean_maintenance_cmd', { request: body });
   throw new Error(`Unsupported Tauri POST route: ${parsed.pathname}`);

@@ -31,13 +31,16 @@ import {
   registerAccount,
   removeFriend,
   respondFriendRequest,
+  respondGameInvite,
   searchSocialUsers,
   seedDemoFriends,
   sendFriendRequest,
+  sendGameInvite,
   sendHeartbeat,
   toggleFavoriteFriend,
   toggleRemoteFavoriteServer
 } from './services/socialService';
+import { apiGet } from './services/apiService';
 import { subscribeSocialRealtime } from './services/socialRealtime';
 import { isSupabaseGatewayUrl, resolveSocialServerUrl } from './shared/supabaseConfig';
 
@@ -49,7 +52,9 @@ const EMPTY_SOCIAL = {
   friends: [],
   incomingRequests: [],
   outgoingRequests: [],
-  favoriteServers: []
+  favoriteServers: [],
+  incomingInvites: [],
+  outgoingInvites: []
 };
 
 export default function App() {
@@ -67,6 +72,8 @@ export default function App() {
   const [navIndex, setNavIndex] = useState(0);
   const [friendsMobileOpen, setFriendsMobileOpen] = useState(false);
   const [social, setSocial] = useState(EMPTY_SOCIAL);
+  const [gameEnv, setGameEnv] = useState(null);
+  const [dismissedInvites, setDismissedInvites] = useState({});
 
   const setModal = value => {
     if (settingsBusy) return;
@@ -178,7 +185,9 @@ export default function App() {
         friends: state.friends || [],
         incomingRequests: state.incomingRequests || [],
         outgoingRequests: state.outgoingRequests || [],
-        favoriteServers: state.favoriteServers || []
+        favoriteServers: state.favoriteServers || [],
+        incomingInvites: state.incomingInvites || [],
+        outgoingInvites: state.outgoingInvites || []
       });
       mergeRemoteFavorites(state.favoriteServers);
     } catch {
@@ -189,6 +198,25 @@ export default function App() {
   useEffect(() => {
     void refreshSocial();
   }, [refreshSocial]);
+
+  useEffect(() => {
+    let activeDetect = true;
+    void apiGet(`/api/game-environment?path=${encodeURIComponent(settings.fivemPath || '')}`)
+      .then(env => {
+        if (!activeDetect || !env?.success) return;
+        setGameEnv(env);
+        if (!settings.fivemPath && env.fivem?.found && env.fivem?.root) {
+          setSettings(prev => {
+            if (prev.fivemPath) return prev;
+            const next = { ...prev, fivemPath: env.fivem.root };
+            try { saveSettings(next); } catch {}
+            return next;
+          });
+        }
+      })
+      .catch(() => {});
+    return () => { activeDetect = false; };
+  }, []);
 
   useEffect(() => {
     const resolvedUrl = resolveSocialServerUrl(settings.socialServerUrl);
@@ -235,7 +263,9 @@ export default function App() {
               friends: state.friends || [],
               incomingRequests: state.incomingRequests || [],
               outgoingRequests: state.outgoingRequests || [],
-              favoriteServers: state.favoriteServers || prev.favoriteServers
+              favoriteServers: state.favoriteServers || prev.favoriteServers,
+              incomingInvites: state.incomingInvites || [],
+              outgoingInvites: state.outgoingInvites || []
             }));
           }
         }
@@ -286,7 +316,9 @@ export default function App() {
       friends: res.friends ?? prev.friends,
       incomingRequests: res.incomingRequests ?? prev.incomingRequests,
       outgoingRequests: res.outgoingRequests ?? prev.outgoingRequests,
-      favoriteServers: res.favoriteServers ?? prev.favoriteServers
+      favoriteServers: res.favoriteServers ?? prev.favoriteServers,
+      incomingInvites: res.incomingInvites ?? prev.incomingInvites,
+      outgoingInvites: res.outgoingInvites ?? prev.outgoingInvites
     }));
   };
 
@@ -308,13 +340,14 @@ export default function App() {
     }
   };
 
-  const handleJoinFriendServer = srv => {
+  const handleJoinFriendServer = (srv, options = {}) => {
     if (!srv?.ip && !srv?.id) return;
     const match = servers.find(s => s.id === srv.id || s.ip === srv.ip);
     if (match) {
       handleSelectServer(match.id);
       setCenterTab('general');
       setFriendsMobileOpen(false);
+      if (options.autoLaunch) void launchCity(match);
       return;
     }
     const created = {
@@ -336,6 +369,7 @@ export default function App() {
     handleSelectServer(created.id);
     setCenterTab('general');
     setFriendsMobileOpen(false);
+    if (options.autoLaunch) void launchCity(created);
   };
 
   const launchCity = async city => {
@@ -512,6 +546,7 @@ export default function App() {
             openOnMobile={friendsMobileOpen}
             onCloseMobile={() => setFriendsMobileOpen(false)}
             social={social}
+            activeServer={active}
             onOpenAuth={openAuth}
             onSendFriendRequest={async target => {
               const res = await sendFriendRequest(target, settings.socialServerUrl);
@@ -535,10 +570,77 @@ export default function App() {
               const res = await seedDemoFriends(settings.socialServerUrl);
               applySocialStateResponse(res);
             }}
+            onInviteFriend={async (friendId, server) => {
+              const targetSrv = server || active;
+              const res = await sendGameInvite(
+                friendId,
+                { id: targetSrv.id, name: targetSrv.name, ip: targetSrv.ip },
+                settings.socialServerUrl
+              );
+              applySocialStateResponse(res);
+              return res;
+            }}
+            onRespondInvite={async (inviteId, action, serverToJoin) => {
+              const res = await respondGameInvite(inviteId, action, settings.socialServerUrl);
+              applySocialStateResponse(res);
+              if (action === 'accept' && (res?.inviteServer || serverToJoin)) {
+                handleJoinFriendServer(res?.inviteServer || serverToJoin, { autoLaunch: true });
+              }
+              return res;
+            }}
             onJoinFriendServer={handleJoinFriendServer}
           />
         </div>
       )}
+
+      {!showPatcherScreen && social.authenticated && (() => {
+        const activeInvite = (social.incomingInvites || []).find(inv => !dismissedInvites[inv.id]);
+        if (!activeInvite) return null;
+        return (
+          <div className="game-invite-toast" role="status" aria-live="polite">
+            <div className="friend-avatar" style={{ background: activeInvite.fromUser?.avatarColor || '#2b6bf3' }}>
+              {(activeInvite.fromUser?.displayName || 'FR').slice(0, 2).toUpperCase()}
+              <span className={`presence-dot ${activeInvite.fromUser?.presence || 'online'}`} />
+            </div>
+            <div className="game-invite-toast-meta">
+              <strong>{activeInvite.fromUser?.displayName || 'เพื่อน'} ชวนเล่นด้วยกัน</strong>
+              <small>เมือง: {activeInvite.server?.name}</small>
+            </div>
+            <div className="game-invite-toast-actions">
+              <button
+                type="button"
+                className="btn-inline-cobalt"
+                onClick={async () => {
+                  setDismissedInvites(prev => ({ ...prev, [activeInvite.id]: true }));
+                  try {
+                    const res = await respondGameInvite(activeInvite.id, 'accept', settings.socialServerUrl);
+                    applySocialStateResponse(res);
+                    handleJoinFriendServer(res?.inviteServer || activeInvite.server, { autoLaunch: true });
+                  } catch (err) {
+                    setLaunchFeedback({ error: err.message });
+                  }
+                }}
+              >
+                เข้าร่วมเลย
+              </button>
+              <button
+                type="button"
+                className="req-decline"
+                aria-label="ปฏิเสธคำชวนเล่น"
+                onClick={async () => {
+                  setDismissedInvites(prev => ({ ...prev, [activeInvite.id]: true }));
+                  try {
+                    const res = await respondGameInvite(activeInvite.id, 'decline', settings.socialServerUrl);
+                    applySocialStateResponse(res);
+                  } catch {}
+                }}
+              >
+                ปฏิเสธ
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {modal === 'library' && (
         <ServerLibrary
@@ -575,7 +677,7 @@ export default function App() {
       />
       <MicTestModal isOpen={modal === 'mic'} onClose={() => setModal(null)} settings={settings} onSaveSettings={savePrefs} />
       <CacheModal isOpen={modal === 'cache'} onClose={() => setModal(null)} settings={settings} />
-      <SettingsModal isOpen={modal === 'settings'} onClose={() => setModal(null)} settings={settings} onSaveSettings={savePrefs} activeServer={active} onMaintenanceBusy={setSettingsBusy} />
+      <SettingsModal isOpen={modal === 'settings'} onClose={() => setModal(null)} settings={settings} onSaveSettings={savePrefs} activeServer={active} onMaintenanceBusy={setSettingsBusy} gameEnv={gameEnv} onGameEnvUpdate={setGameEnv} />
       <PatcherModal isOpen={modal === 'patcher'} onClose={() => setModal(null)} activeServer={active} settings={settings} onSaveSettings={savePrefs} onUpdateServer={update} launcherUpdate={launcherUpdate} onLauncherUpdateChange={setLauncherUpdate} onBusyChange={setSettingsBusy} onOpenFullPatcher={showPatcherScreen ? null : () => setShowPatcherScreen(true)} />
       <NewServerModal isOpen={modal === 'new'} onClose={() => setModal(null)} onAddServer={server => { setServers(prev => [server, ...prev]); setActiveId(server.id); }} />
     </div>

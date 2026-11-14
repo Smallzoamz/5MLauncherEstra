@@ -163,6 +163,18 @@ export function createSocialStore(options = {}) {
       created_at TEXT NOT NULL,
       PRIMARY KEY(user_id, server_id)
     );
+    CREATE TABLE IF NOT EXISTS game_invites (
+      id TEXT PRIMARY KEY,
+      from_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      to_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      server_id TEXT NOT NULL,
+      server_name TEXT NOT NULL,
+      server_ip TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_game_invites_to ON game_invites(to_user_id, status, expires_at);
   `);
 
   function createSessionForUser(userId) {
@@ -323,6 +335,22 @@ export function createSocialStore(options = {}) {
       ORDER BY fr.created_at DESC
     `).all(userId);
 
+    const incomingInviteRows = db.prepare(`
+      SELECT gi.id AS invite_id, gi.server_id, gi.server_name, gi.server_ip, gi.created_at AS invite_created_at, gi.expires_at, u.*
+      FROM game_invites gi
+      JOIN users u ON u.id = gi.from_user_id
+      WHERE gi.to_user_id = ? AND gi.status = 'pending' AND gi.expires_at > ?
+      ORDER BY gi.created_at DESC
+    `).all(userId, now);
+
+    const outgoingInviteRows = db.prepare(`
+      SELECT gi.id AS invite_id, gi.server_id, gi.server_name, gi.server_ip, gi.created_at AS invite_created_at, gi.expires_at, u.*
+      FROM game_invites gi
+      JOIN users u ON u.id = gi.to_user_id
+      WHERE gi.from_user_id = ? AND gi.status = 'pending' AND gi.expires_at > ?
+      ORDER BY gi.created_at DESC
+    `).all(userId, now);
+
     return {
       user: toPublicUser(userRow, now, true),
       favoriteServers: getUserFavoriteServers(userId),
@@ -336,6 +364,20 @@ export function createSocialStore(options = {}) {
         id: r.request_id,
         createdAt: r.requested_at,
         user: toPublicUser(r, now, false)
+      })),
+      incomingInvites: incomingInviteRows.map(r => ({
+        id: r.invite_id,
+        createdAt: r.invite_created_at,
+        expiresAt: new Date(r.expires_at).toISOString(),
+        server: { id: r.server_id, name: r.server_name, ip: r.server_ip },
+        fromUser: toPublicUser(r, now, false)
+      })),
+      outgoingInvites: outgoingInviteRows.map(r => ({
+        id: r.invite_id,
+        createdAt: r.invite_created_at,
+        expiresAt: new Date(r.expires_at).toISOString(),
+        server: { id: r.server_id, name: r.server_name, ip: r.server_ip },
+        toUser: toPublicUser(r, now, false)
       }))
     };
   }
@@ -498,6 +540,61 @@ export function createSocialStore(options = {}) {
     return getSocialState(userId);
   }
 
+  function sendGameInvite(userId, friendId, server) {
+    if (!friendId || friendId === userId) {
+      throw Object.assign(new Error('ไม่พบเพื่อนที่ต้องการชวน'), { status: 400 });
+    }
+    const isFriend = db.prepare('SELECT 1 FROM friendships WHERE user_id = ? AND friend_id = ?').get(userId, friendId);
+    if (!isFriend) {
+      throw Object.assign(new Error('สามารถชวนได้เฉพาะผู้ที่เป็นเพื่อนกันเท่านั้น'), { status: 403 });
+    }
+    const friendRow = db.prepare('SELECT * FROM users WHERE id = ?').get(friendId);
+    if (!friendRow || friendRow.is_demo) {
+      throw Object.assign(new Error('ไม่สามารถส่งคำชวนให้บัญชีตัวอย่างได้'), { status: 400 });
+    }
+    const sid = String(server?.id || '').trim().slice(0, 100);
+    const sname = String(server?.name || '').trim().slice(0, 100);
+    const sip = String(server?.ip || '').trim().slice(0, 253);
+    if (!sid || !sname || !sip) {
+      throw Object.assign(new Error('กรุณาเลือกเมืองก่อนชวนเพื่อน'), { status: 400 });
+    }
+    const now = Date.now();
+    db.prepare("UPDATE game_invites SET status = 'cancelled' WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending'")
+      .run(userId, friendId);
+    db.prepare(`
+      INSERT INTO game_invites (id, from_user_id, to_user_id, server_id, server_name, server_ip, status, created_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+    `).run(crypto.randomUUID(), userId, friendId, sid, sname, sip, new Date(now).toISOString(), now + 5 * 60_000);
+    return {
+      ...getSocialState(userId),
+      message: `ส่งคำชวนเข้าเล่น ${sname} ไปยัง ${friendRow.display_name} แล้ว`
+    };
+  }
+
+  function respondGameInvite(userId, inviteId, action) {
+    const invite = db.prepare("SELECT * FROM game_invites WHERE id = ? AND status = 'pending'").get(inviteId);
+    if (!invite) {
+      throw Object.assign(new Error('คำชวนหมดอายุหรือถูกจัดการแล้ว'), { status: 404 });
+    }
+    if (invite.expires_at <= Date.now()) {
+      db.prepare("UPDATE game_invites SET status = 'expired' WHERE id = ?").run(invite.id);
+      throw Object.assign(new Error('คำชวนหมดอายุแล้ว'), { status: 410 });
+    }
+    if (action === 'cancel') {
+      if (invite.from_user_id !== userId) throw Object.assign(new Error('ไม่มีสิทธิ์ยกเลิกคำชวนนี้'), { status: 403 });
+      db.prepare("UPDATE game_invites SET status = 'cancelled' WHERE id = ?").run(invite.id);
+    } else if (action === 'accept' || action === 'decline') {
+      if (invite.to_user_id !== userId) throw Object.assign(new Error('ไม่มีสิทธิ์จัดการคำชวนนี้'), { status: 403 });
+      db.prepare('UPDATE game_invites SET status = ? WHERE id = ?').run(action === 'accept' ? 'accepted' : 'declined', invite.id);
+    } else {
+      throw Object.assign(new Error('คำสั่งไม่ถูกต้อง'), { status: 400 });
+    }
+    return {
+      ...getSocialState(userId),
+      inviteServer: { id: invite.server_id, name: invite.server_name, ip: invite.server_ip }
+    };
+  }
+
   return {
     dbPath,
     register,
@@ -513,6 +610,8 @@ export function createSocialStore(options = {}) {
     toggleFavoriteServer,
     searchUsers,
     seedDemoFriendsForUser,
+    sendGameInvite,
+    respondGameInvite,
     close: () => db.close()
   };
 }

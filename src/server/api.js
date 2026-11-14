@@ -1,6 +1,13 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { getSystemPresence } from './systemPresence.js';
-import { queryLiveServer, executeRealLaunch, executeRealCleanCache, resolveInstallation } from './fivemBackend.js';
+import {
+  queryLiveServer,
+  executeRealLaunch,
+  executeRealCleanCache,
+  resolveInstallation,
+  detectGameEnvironment,
+  installFiveMBootstrap
+} from './fivemBackend.js';
 import { previewMaintenance, cleanMaintenance } from './maintenance.js';
 import { createSocialStore } from './socialStore.js';
 import { SUPABASE_PUBLISHABLE_KEY, isSupabaseGatewayUrl } from '../shared/supabaseConfig.js';
@@ -12,6 +19,7 @@ const DEFAULT_SOCIAL_RATE_LIMITS = {
   '/api/social/register': { max: 6, windowMs: 10 * 60_000 },
   '/api/social/login': { max: 15, windowMs: 5 * 60_000 },
   '/api/social/friend-request': { max: 20, windowMs: 60 * 60_000 },
+  '/api/social/game-invite': { max: 20, windowMs: 10 * 60_000 },
   '/api/social/search': { max: 40, windowMs: 60_000 },
   '/api/social/heartbeat': { max: 40, windowMs: 60_000 },
   defaultMutation: { max: 60, windowMs: 60_000 },
@@ -111,6 +119,8 @@ export function createApi(services = {}) {
     executeRealLaunch,
     executeRealCleanCache,
     resolveInstallation,
+    detectGameEnvironment,
+    installFiveMBootstrap,
     previewMaintenance,
     cleanMaintenance,
     ...services
@@ -147,6 +157,8 @@ export function createApi(services = {}) {
       '/api/system-presence': 'GET',
       '/api/server-query': 'GET',
       '/api/installation': 'GET',
+      '/api/game-environment': 'GET',
+      '/api/install-fivem': 'POST',
       '/api/launch-fivem': 'POST',
       '/api/clean-cache': 'POST',
       '/api/maintenance-preview': 'GET',
@@ -164,7 +176,9 @@ export function createApi(services = {}) {
       '/api/social/friend-favorite': 'POST',
       '/api/social/friend-remove': 'POST',
       '/api/social/server-favorite': 'POST',
-      '/api/social/demo-seed': 'POST'
+      '/api/social/demo-seed': 'POST',
+      '/api/social/game-invite': 'POST',
+      '/api/social/game-invite-respond': 'POST'
     };
 
     if (!routes[pathname]) return send(res, 404, { error: 'API not found' });
@@ -175,7 +189,7 @@ export function createApi(services = {}) {
 
     const isPost = req.method === 'POST';
     const isSocial = pathname.startsWith('/api/social/');
-    const isHardwareMutation = ['/api/launch-fivem', '/api/clean-cache', '/api/clean-maintenance'].includes(pathname);
+    const isHardwareMutation = ['/api/launch-fivem', '/api/clean-cache', '/api/clean-maintenance', '/api/install-fivem'].includes(pathname);
 
     if (isPost) {
       const supplied = Buffer.from(String(req.headers['x-launcher-token'] || ''));
@@ -399,6 +413,12 @@ export function createApi(services = {}) {
         if (pathname === '/api/social/demo-seed') {
           return send(res, 200, { success: true, ...social.seedDemoFriendsForUser(userId) });
         }
+        if (pathname === '/api/social/game-invite') {
+          return send(res, 200, { success: true, ...social.sendGameInvite(userId, body.friendId, body.server) });
+        }
+        if (pathname === '/api/social/game-invite-respond') {
+          return send(res, 200, { success: true, ...social.respondGameInvite(userId, body.inviteId, body.action) });
+        }
       }
 
       let result;
@@ -406,6 +426,7 @@ export function createApi(services = {}) {
       if (pathname === '/api/system-presence') result = await handlers.getSystemPresence();
       if (pathname === '/api/server-query') result = await handlers.queryLiveServer(params.get('target'));
       if (pathname === '/api/installation') result = { success: true, ...await handlers.resolveInstallation(params.get('path') || '') };
+      if (pathname === '/api/game-environment') result = await handlers.detectGameEnvironment(params.get('path') || '');
       if (pathname === '/api/maintenance-preview') result = await handlers.previewMaintenance({ fivemPath: params.get('path') || '' });
       if (isHardwareMutation) {
         const body = await readBody(req);
@@ -413,7 +434,9 @@ export function createApi(services = {}) {
           ? await handlers.executeRealLaunch(body)
           : pathname === '/api/clean-maintenance'
             ? await handlers.cleanMaintenance(body)
-            : await handlers.executeRealCleanCache(body);
+            : pathname === '/api/install-fivem'
+              ? await handlers.installFiveMBootstrap(body)
+              : await handlers.executeRealCleanCache(body);
       }
       send(res, result.success === false ? 409 : 200, result);
     } catch (error) {
