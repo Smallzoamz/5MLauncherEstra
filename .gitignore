@@ -10,3 +10,9 @@ src-tauri/target/
 .tauri/
 artifacts/
 IMPLEMENTATION_PLAN.m/
+discord-bot/.env
+discord-bot/node_modules/
+discord-bot/data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
