@@ -1,7 +1,7 @@
 export const DEFAULT_COMMUNITY_LINKS = {
   websiteUrl: 'https://estralauncher.vercel.app/',
-  discordUrl: '',
-  facebookUrl: ''
+  discordUrl: 'https://discord.gg/WYjfK6FWgB',
+  facebookUrl: 'https://www.facebook.com/estralauncher'
 };
 
 export const COMMUNITY_CHANNELS = [
@@ -17,14 +17,14 @@ export const COMMUNITY_CHANNELS = [
     id: 'discord',
     label: 'Discord',
     thaiLabel: 'Discord Server',
-    placeholder: 'https://discord.gg/your-invite'
+    placeholder: 'https://discord.gg/WYjfK6FWgB'
   },
   {
     key: 'facebookUrl',
     id: 'facebook',
     label: 'Facebook',
     thaiLabel: 'Facebook Page',
-    placeholder: 'https://facebook.com/your-page'
+    placeholder: 'https://www.facebook.com/estralauncher'
   }
 ];
 

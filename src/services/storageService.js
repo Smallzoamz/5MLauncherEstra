@@ -9,7 +9,9 @@ export const DEFAULT_SETTINGS = {
   fivemPath: '', autoClearCacheBeforeLaunch: false, checkMicBeforeLaunch: true,
   requireSteamDiscordBeforeLaunch: false, preferredAudioDeviceId: 'default',
   githubRepo: DEFAULT_GITHUB_REPO, socialServerUrl: SUPABASE_SOCIAL_GATEWAY_URL,
-  websiteUrl: 'https://estralauncher.vercel.app/', discordUrl: '', facebookUrl: ''
+  websiteUrl: 'https://estralauncher.vercel.app/',
+  discordUrl: 'https://discord.gg/WYjfK6FWgB',
+  facebookUrl: 'https://www.facebook.com/estralauncher'
 };
 export const DEFAULT_SERVERS = [
   { id: 'noxtis-legacy', name: 'Noxtis Legacy', ip: '89.38.101.136:30120', tag: 'Roleplay', inGameName: '', cl2: false, favorite: true, patchManifestUrl: '' }

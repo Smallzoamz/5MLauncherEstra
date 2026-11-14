@@ -37,7 +37,6 @@ import {
   respondFriendRequest,
   respondGameInvite,
   searchSocialUsers,
-  seedDemoFriends,
   sendFriendRequest,
   sendGameInvite,
   sendHeartbeat,
@@ -342,10 +341,9 @@ export default function App() {
     if (!url) {
       setUiNotice({
         _seq: ++alertSeqRef.current,
-        tone: 'notice',
-        message: `ยังไม่ได้ตั้งค่าลิงก์ ${channel.thaiLabel} กรุณาเพิ่มลิงก์ในหน้าตั้งค่า`
+        tone: 'error',
+        message: `ไม่สามารถเปิด ${channel.thaiLabel} ได้`
       });
-      setModal('settings');
       return;
     }
     try {
@@ -692,10 +690,6 @@ export default function App() {
               applySocialStateResponse(res);
             }}
             onSearchUsers={query => searchSocialUsers(query, settings.socialServerUrl)}
-            onSeedDemoFriends={async () => {
-              const res = await seedDemoFriends(settings.socialServerUrl);
-              applySocialStateResponse(res);
-            }}
             onInviteFriend={async (friendId, server) => {
               const targetSrv = server || active;
               const res = await sendGameInvite(

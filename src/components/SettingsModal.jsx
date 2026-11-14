@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { apiGet, apiPost } from '../services/apiService';
 import { generateCitizenFXIni } from '../services/fivemService';
 import { APP_VERSION } from '../shared/patcherConfig';
-import { COMMUNITY_CHANNELS } from '../shared/communityLinks';
 import MaintenanceSettings from './MaintenanceSettings';
 
 export default function SettingsModal({ isOpen, onClose, settings, onSaveSettings, activeServer, onMaintenanceBusy, gameEnv, onGameEnvUpdate, onRequestConfirm }) {
@@ -145,31 +144,6 @@ export default function SettingsModal({ isOpen, onClose, settings, onSaveSetting
         ['autoClearCacheBeforeLaunch', 'ล้างแคชก่อนเปิดเกม', 'ลบแคชเซิร์ฟเวอร์ทุกครั้งที่กดเล่น ต้องปิด FiveM ก่อน'],
         ['requireSteamDiscordBeforeLaunch', 'กำหนดให้เปิด Steam และ Discord ก่อนเล่น', 'เปิดตัวเลือกนี้เมื่อเซิร์ฟเวอร์ของคุณกำหนดให้ใช้']
       ].map(([key, title, help]) => <label className="setting-row" key={key}><span>{title}<small className="help-text">{help}</small></span><input type="checkbox" checked={form[key]} onChange={e => setForm({ ...form, [key]: e.target.checked })} /></label>)}
-      <details className="configuration-panel patch-template-panel">
-        <summary>
-          <span>ช่องทางชุมชน (Website / Discord / Facebook Page)</span>
-        </summary>
-        <div className="patch-template-body settings-community-grid">
-          {COMMUNITY_CHANNELS.map(channel => (
-            <div key={channel.key}>
-              <label htmlFor={`community-${channel.key}`} className="field-label">{channel.thaiLabel}</label>
-              <div className="input-container">
-                <input
-                  id={`community-${channel.key}`}
-                  type="url"
-                  disabled={busy}
-                  value={form[channel.key] || ''}
-                  onChange={e => setForm({ ...form, [channel.key]: e.target.value })}
-                  placeholder={channel.placeholder}
-                />
-              </div>
-            </div>
-          ))}
-          <small className="help-text">
-            รองรับเฉพาะลิงก์ https:// หรือ http:// โดยปุ่มลัดจะแสดงในแถบเมนูด้านซ้าย
-          </small>
-        </div>
-      </details>
       <button type="button" className="btn-action-refresh" disabled={!activeServer?.gameBuild} onClick={exportIni}>ดาวน์โหลดตัวอย่าง Game Build (.ini)</button>
       {message && <p role="status" className="notice">{message}</p>}
       <MaintenanceSettings fivemPath={form.fivemPath} onBusyChange={value => { setMaintenanceBusy(value); onMaintenanceBusy?.(value); }} onRequestConfirm={onRequestConfirm} />

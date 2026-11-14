@@ -553,8 +553,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .rail-community-btn:hover { background: rgba(43, 107, 243, 0.18); border-color: rgba(96, 165, 250, 0.42); color: #fff; }
 .rail-community-btn.configured { color: #dbeafe; }
 
-.settings-community-grid { display: flex; flex-direction: column; gap: 10px; }
-
 .profile-editor-card {
   display: flex;
   flex-direction: column;
@@ -1190,8 +1188,6 @@ h1 > span { display: block; }
 .req-decline:hover { background: #dc2626; color: #fff; }
 
 .friends-empty-note { font-size: 11px; color: var(--text-dark); line-height: 1.5; padding: 6px 4px; }
-.friends-empty-cta { display: flex; flex-direction: column; gap: 8px; }
-.friends-demo-btn { min-height: 34px; font-size: 11px; padding: 6px 10px; }
 
 .friends-guest-panel {
   flex: 1;

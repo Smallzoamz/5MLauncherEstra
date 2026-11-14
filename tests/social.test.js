@@ -14,7 +14,7 @@ import {
 } from '../src/shared/supabaseConfig.js';
 import { DEFAULT_SETTINGS } from '../src/services/storageService.js';
 import { validateAvatarUrl } from '../src/shared/profileAvatar.js';
-import { sanitizeExternalUrl } from '../src/shared/communityLinks.js';
+import { resolveCommunityLinks, sanitizeExternalUrl } from '../src/shared/communityLinks.js';
 
 test('socialStore handles register, password hashing, login, friend requests, presence, and favorites', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'estra-social-'));
@@ -334,4 +334,9 @@ test('sanitizeExternalUrl validates official community links safely', () => {
   assert.equal(sanitizeExternalUrl('//evil.example.com'), '');
   assert.equal(sanitizeExternalUrl('not a url'), '');
   assert.equal(sanitizeExternalUrl('https://user:pass@example.com'), '');
+
+  const defaults = resolveCommunityLinks();
+  assert.equal(defaults.websiteUrl, 'https://estralauncher.vercel.app/');
+  assert.equal(defaults.discordUrl, 'https://discord.gg/WYjfK6FWgB');
+  assert.equal(defaults.facebookUrl, 'https://www.facebook.com/estralauncher');
 });

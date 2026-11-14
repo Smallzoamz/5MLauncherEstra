@@ -7,7 +7,6 @@ import {
   Play,
   Search,
   Send,
-  Sparkles,
   Star,
   UserMinus,
   UserPlus,
@@ -36,7 +35,6 @@ export default function FriendsSidebar({
   onToggleFavoriteFriend,
   onRemoveFriend,
   onSearchUsers,
-  onSeedDemoFriends,
   onInviteFriend,
   onRespondInvite,
   onJoinFriendServer,
@@ -404,17 +402,7 @@ export default function FriendsSidebar({
                       ))}
                     </ul>
                   ) : friends.length === 0 ? (
-                    <div className="friends-empty-cta">
-                      <p className="friends-empty-note">ยังไม่มีเพื่อนในรายการ กด + ด้านบนเพื่อค้นหาด้วย Username หรือ Friend Code ({user.friendCode})</p>
-                      <button
-                        type="button"
-                        className="soft-button friends-demo-btn"
-                        onClick={onSeedDemoFriends}
-                        title="เพิ่มรายชื่อตัวอย่างไว้ทดสอบ UI เพื่อนโปรดและสถานะ Online/Offline"
-                      >
-                        <Sparkles size={13} /> เพิ่มเพื่อนตัวอย่าง (Demo)
-                      </button>
-                    </div>
+                    <p className="friends-empty-note">ยังไม่มีเพื่อนในรายการ กด + ด้านบนเพื่อค้นหาด้วย Username หรือ Friend Code ({user.friendCode})</p>
                   ) : (
                     <p className="friends-empty-note">ไม่พบเพื่อนที่ตรงกับการค้นหา</p>
                   )

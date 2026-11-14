@@ -272,7 +272,7 @@ export default function ServerSidebar({
                 key={channel.key}
                 type="button"
                 className={`rail-community-btn${url ? ' configured' : ''}`}
-                title={url ? `${channel.thaiLabel}: ${url}` : `${channel.thaiLabel} (กดเพื่อตั้งค่าลิงก์)`}
+                title={url ? `${channel.thaiLabel}: ${url}` : channel.thaiLabel}
                 aria-label={channel.thaiLabel}
                 onClick={() => onOpenCommunityLink?.(channel, url)}
               >
