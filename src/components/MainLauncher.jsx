@@ -5,7 +5,7 @@ import { bannerImageUrl } from '../shared/serverMedia';
 import { cityBackdrop } from '../shared/cityBackdrop';
 import MicIndicator from './MicIndicator';
 import ServerAvatar from './ServerAvatar';
-import { normalizePatchManifestUrl } from '../shared/patcherConfig';
+import { APP_VERSION, normalizePatchManifestUrl } from '../shared/patcherConfig';
 import {
   Play,
   ArrowUpRight,
@@ -534,7 +534,7 @@ export default function MainLauncher({
 
       <div className="workspace-footer">
         <span className="local-note">
-          <i /> ESTRA FIVEM LAUNCHER <span>/</span> v2.0.1 · RUST/TAURI
+          <i /> ESTRA FIVEM LAUNCHER <span>/</span> v{APP_VERSION} · RUST/TAURI
         </span>
         <div className="workspace-footer-actions">
           <button className="quiet-button" disabled={busy} onClick={onOpenPatcher} aria-label="เปิด Patcher">

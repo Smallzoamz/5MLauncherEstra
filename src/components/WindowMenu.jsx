@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Ellipsis, Minus, Maximize2, Power } from 'lucide-react';
+import { APP_VERSION } from '../shared/patcherConfig';
 
 export default function WindowMenu() {
   const menu = useRef(null);
@@ -23,7 +24,7 @@ export default function WindowMenu() {
       <button onClick={() => act('hideToTray')}><Minus size={16} />ซ่อนลง System Tray</button>
       <button onClick={() => act('toggleMaximize')}><Maximize2 size={16} />ขยาย / คืนขนาดหน้าต่าง</button>
       <button className="window-close" onClick={() => act('close')}><Power size={16} />ปิดโปรแกรม</button>
-      <small>ESTRA FIVEM LAUNCHER · 2.0.1</small>
+      <small>ESTRA FIVEM LAUNCHER · {APP_VERSION}</small>
     </div>
   </details>;
 }

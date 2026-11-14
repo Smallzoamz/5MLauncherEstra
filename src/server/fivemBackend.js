@@ -363,7 +363,7 @@ export async function installFiveMBootstrap(options = {}, dependencies = {}) {
   const fetchImpl = dependencies.fetch || fetch;
   const resp = await fetchImpl('https://runtime.fivem.net/client/FiveM.exe', {
     signal: AbortSignal.timeout(90000),
-    headers: { 'User-Agent': 'EstraFiveMLauncher/2.1.3' }
+    headers: { 'User-Agent': 'EstraFiveMLauncher/2.1.4' }
   });
   if (!resp.ok) throw new Error(`ดาวน์โหลด FiveM.exe ไม่สำเร็จ (HTTP ${resp.status})`);
   const buf = Buffer.from(await resp.arrayBuffer());

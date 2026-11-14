@@ -16,6 +16,7 @@ import {
   UserCircle2
 } from 'lucide-react';
 import ServerAvatar from './ServerAvatar';
+import { APP_VERSION } from '../shared/patcherConfig';
 
 export default function ServerSidebar({
   servers,
@@ -244,7 +245,7 @@ export default function ServerSidebar({
       </div>
 
       <div className="rail-bottom-meta">
-        <span>ESTRA v2.0.1</span>
+        <span>ESTRA v{APP_VERSION}</span>
         <span className={`rail-social-pill${user ? ' online' : ''}`}>
           {user ? `@${user.username}` : 'Guest'}
         </span>
