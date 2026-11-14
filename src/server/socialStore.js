@@ -3,11 +3,11 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { AVATAR_PALETTE, validateAvatarUrl } from '../shared/profileAvatar.js';
 
 const ONLINE_WINDOW_MS = 45_000;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const VALID_STATUS_PREFS = new Set(['online', 'away', 'invisible', 'offline']);
-const AVATAR_PALETTE = ['#2b6bf3', '#0ea5e9', '#6366f1', '#10b981', '#8b5cf6', '#f59e0b', '#ec4899'];
 
 export function defaultSocialDbPath() {
   const base = process.env.LOCALAPPDATA || path.join(os.homedir(), '.estra-launcher');
@@ -90,6 +90,7 @@ function toPublicUser(row, now = Date.now(), includePrivate = false) {
     displayName: row.display_name,
     friendCode: row.friend_code,
     avatarColor: row.avatar_color,
+    avatarUrl: row.avatar_url || '',
     presence,
     isDemo: !!row.is_demo,
     lastSeenAt: row.last_seen_at || null,
@@ -121,6 +122,7 @@ export function createSocialStore(options = {}) {
       friend_code TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
       avatar_color TEXT NOT NULL,
+      avatar_url TEXT,
       status_pref TEXT NOT NULL DEFAULT 'online',
       is_demo INTEGER NOT NULL DEFAULT 0,
       last_seen_at TEXT,
@@ -176,6 +178,11 @@ export function createSocialStore(options = {}) {
     );
     CREATE INDEX IF NOT EXISTS idx_game_invites_to ON game_invites(to_user_id, status, expires_at);
   `);
+
+  const userCols = db.prepare('PRAGMA table_info(users)').all();
+  if (!userCols.some(col => col.name === 'avatar_url')) {
+    db.exec('ALTER TABLE users ADD COLUMN avatar_url TEXT');
+  }
 
   function createSessionForUser(userId) {
     const now = Date.now();
@@ -295,6 +302,42 @@ export function createSocialStore(options = {}) {
 
     const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
     return { user: toPublicUser(updated, Date.now(), true) };
+  }
+
+  function updateProfile(userId, payload = {}) {
+    const existing = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    if (!existing) throw Object.assign(new Error('ไม่พบบัญชีผู้ใช้'), { status: 404 });
+
+    const displayName = payload.displayName !== undefined
+      ? validateDisplayName(payload.displayName, existing.display_name)
+      : existing.display_name;
+
+    let avatarColor = existing.avatar_color;
+    if (payload.avatarColor !== undefined) {
+      const candidateColor = String(payload.avatarColor || '').trim().toLowerCase();
+      if (!AVATAR_PALETTE.includes(candidateColor)) {
+        throw Object.assign(new Error('สีโปรไฟล์ไม่ถูกต้อง'), { status: 400 });
+      }
+      avatarColor = candidateColor;
+    }
+
+    let avatarUrl = existing.avatar_url || null;
+    if (payload.avatarUrl !== undefined) {
+      const checked = validateAvatarUrl(payload.avatarUrl);
+      if (!checked.valid) {
+        throw Object.assign(new Error(checked.error || 'รูปโปรไฟล์ไม่ถูกต้อง'), { status: 400 });
+      }
+      avatarUrl = checked.value || null;
+    }
+
+    db.prepare(`
+      UPDATE users
+      SET display_name = ?, avatar_color = ?, avatar_url = ?
+      WHERE id = ?
+    `).run(displayName, avatarColor, avatarUrl, userId);
+
+    const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    return { user: toPublicUser(updated, Date.now(), true), message: 'บันทึกข้อมูลโปรไฟล์แล้ว' };
   }
 
   function getSocialState(userId) {
@@ -602,6 +645,7 @@ export function createSocialStore(options = {}) {
     logout,
     resolveSession,
     updateHeartbeat,
+    updateProfile,
     getSocialState,
     sendFriendRequest,
     respondFriendRequest,

@@ -38,7 +38,7 @@ async function readBody(req) {
   let body = '';
   for await (const chunk of req) {
     body += chunk;
-    if (Buffer.byteLength(body) > 16384) throw Object.assign(new Error('ข้อมูลใหญ่เกินกำหนด'), { status: 413 });
+    if (Buffer.byteLength(body) > 65536) throw Object.assign(new Error('ข้อมูลใหญ่เกินกำหนด'), { status: 413 });
   }
   try {
     const data = JSON.parse(body || '{}');
@@ -125,6 +125,9 @@ export function createSocialHttpServer({ dbPath } = {}) {
 
       if (pathname === '/api/social/heartbeat') {
         return send(res, 200, { success: true, ...store.updateHeartbeat(userId, body) });
+      }
+      if (pathname === '/api/social/profile-update') {
+        return send(res, 200, { success: true, ...store.updateProfile(userId, body) });
       }
       if (pathname === '/api/social/friend-request') {
         return send(res, 200, { success: true, ...store.sendFriendRequest(userId, body.target), ...store.getSocialState(userId) });

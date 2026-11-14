@@ -18,6 +18,7 @@ const SOCIAL_REFRESH_COOKIE = 'estra_social_refresh';
 const DEFAULT_SOCIAL_RATE_LIMITS = {
   '/api/social/register': { max: 6, windowMs: 10 * 60_000 },
   '/api/social/login': { max: 15, windowMs: 5 * 60_000 },
+  '/api/social/profile-update': { max: 20, windowMs: 10 * 60_000 },
   '/api/social/friend-request': { max: 20, windowMs: 60 * 60_000 },
   '/api/social/game-invite': { max: 20, windowMs: 10 * 60_000 },
   '/api/social/search': { max: 40, windowMs: 60_000 },
@@ -84,11 +85,11 @@ function createSocialRateLimiter(overrides = {}) {
   };
 }
 
-async function readBody(req) {
+async function readBody(req, maxBytes = 8192) {
   let body = '';
   for await (const chunk of req) {
     body += chunk;
-    if (Buffer.byteLength(body) > 8192) throw Object.assign(new Error('ข้อมูลใหญ่เกินกำหนด'), { status: 413 });
+    if (Buffer.byteLength(body) > maxBytes) throw Object.assign(new Error('ข้อมูลใหญ่เกินกำหนด'), { status: 413 });
   }
   try {
     const data = JSON.parse(body || '{}');
@@ -171,6 +172,7 @@ export function createApi(services = {}) {
       '/api/social/login': 'POST',
       '/api/social/logout': 'POST',
       '/api/social/heartbeat': 'POST',
+      '/api/social/profile-update': 'POST',
       '/api/social/friend-request': 'POST',
       '/api/social/friend-respond': 'POST',
       '/api/social/friend-favorite': 'POST',
@@ -249,7 +251,9 @@ export function createApi(services = {}) {
           } else if (req.headers.cookie) {
             headers.Cookie = req.headers.cookie;
           }
-          const body = isPost ? JSON.stringify(await readBody(req)) : undefined;
+          const body = isPost
+            ? JSON.stringify(await readBody(req, pathname === '/api/social/profile-update' ? 65536 : 8192))
+            : undefined;
           const upstream = await fetch(targetUrl, {
             method: req.method,
             headers,
@@ -386,9 +390,12 @@ export function createApi(services = {}) {
           return send(res, 200, { success: true, users: social.searchUsers(userId, params.get('q') || '') });
         }
 
-        const body = await readBody(req);
+        const body = await readBody(req, pathname === '/api/social/profile-update' ? 65536 : 8192);
         if (pathname === '/api/social/heartbeat') {
           return send(res, 200, { success: true, ...social.updateHeartbeat(userId, body) });
+        }
+        if (pathname === '/api/social/profile-update') {
+          return send(res, 200, { success: true, ...social.updateProfile(userId, body) });
         }
         if (pathname === '/api/social/friend-request') {
           const result = social.sendFriendRequest(userId, body.target);

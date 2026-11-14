@@ -14,6 +14,7 @@ import {
   Users,
   X
 } from 'lucide-react';
+import { UserAvatar } from './UserAvatar';
 
 function presenceLabel(friend) {
   if (friend.presence === 'in-game' && friend.currentServer?.name) {
@@ -265,9 +266,7 @@ export default function FriendsSidebar({
                   <ul className="friends-list">
                     {incomingInvites.map(inv => (
                       <li key={inv.id} className="friend-request-row friend-invite-row">
-                        <div className="friend-avatar" style={{ background: inv.fromUser?.avatarColor || '#2b6bf3' }}>
-                          {(inv.fromUser?.displayName || 'FR').slice(0, 2).toUpperCase()}
-                        </div>
+                        <UserAvatar user={inv.fromUser} fallbackInitials="FR" />
                         <div className="friend-meta">
                           <strong>{inv.fromUser?.displayName || 'เพื่อน'}</strong>
                           <small title={inv.server?.name}>ชวนเล่น {inv.server?.name}</small>
@@ -435,9 +434,7 @@ export default function FriendsSidebar({
                   <ul className="friends-list">
                     {incoming.map(req => (
                       <li key={req.id} className="friend-request-row">
-                        <div className="friend-avatar" style={{ background: req.user.avatarColor || '#2b6bf3' }}>
-                          {req.user.displayName.slice(0, 2).toUpperCase()}
-                        </div>
+                        <UserAvatar user={req.user} />
                         <div className="friend-meta">
                           <strong>{req.user.displayName}</strong>
                           <small>@{req.user.username} · {req.user.friendCode}</small>
@@ -475,9 +472,7 @@ export default function FriendsSidebar({
                   <ul className="friends-list">
                     {outgoing.map(req => (
                       <li key={req.id} className="friend-request-row">
-                        <div className="friend-avatar" style={{ background: req.user.avatarColor || '#334155' }}>
-                          {req.user.displayName.slice(0, 2).toUpperCase()}
-                        </div>
+                        <UserAvatar user={req.user} fallbackColor="#334155" />
                         <div className="friend-meta">
                           <strong>{req.user.displayName}</strong>
                           <small>รอตอบรับ…</small>
@@ -500,10 +495,7 @@ export default function FriendsSidebar({
 
           <div className="friends-rail-footer">
             <button type="button" className="friends-self-strip" onClick={() => onOpenAuth('login')}>
-              <span className="friend-avatar self" style={{ background: user.avatarColor || '#2b6bf3' }}>
-                {user.displayName.slice(0, 2).toUpperCase()}
-                <span className={`presence-dot ${user.presence}`} />
-              </span>
+              <UserAvatar user={user} className="friend-avatar self" showPresence />
               <span className="friend-meta">
                 <strong>{user.displayName}</strong>
                 <small>{user.friendCode} · {user.presence}</small>
@@ -519,10 +511,7 @@ export default function FriendsSidebar({
 function FriendRow({ friend, canInvite, activeServerName, onToggleFavorite, onRemove, onJoin, onInvite }) {
   return (
     <li className={`friend-row ${friend.presence}`}>
-      <div className="friend-avatar" style={{ background: friend.avatarColor || '#2b6bf3' }}>
-        {friend.displayName.slice(0, 2).toUpperCase()}
-        <span className={`presence-dot ${friend.presence}`} />
-      </div>
+      <UserAvatar user={friend} showPresence />
       <div className="friend-meta">
         <strong>
           <span>{friend.displayName}</span>

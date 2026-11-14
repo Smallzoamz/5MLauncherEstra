@@ -35,7 +35,7 @@ Deno.serve(async (req: Request) => {
 
   const readBody = async (): Promise<R> => {
     const t = await req.text();
-    if (new TextEncoder().encode(t).length > 16384) throw Object.assign(new Error('ข้อมูลใหญ่เกินกำหนด'), { status: 413 });
+    if (new TextEncoder().encode(t).length > 65536) throw Object.assign(new Error('ข้อมูลใหญ่เกินกำหนด'), { status: 413 });
     const d = JSON.parse(t || '{}');
     if (!d || Array.isArray(d) || typeof d !== 'object') throw new Error('JSON ไม่ถูกต้อง');
     return d as R;

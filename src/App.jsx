@@ -11,8 +11,11 @@ import SettingsModal from './components/SettingsModal';
 import NewServerModal from './components/NewServerModal';
 import PatcherModal from './components/PatcherModal';
 import ConfirmModal from './components/ConfirmModal';
+import { AlertToastStack } from './components/AlertToastStack';
+import { UserAvatar } from './components/UserAvatar';
 import useDialogFocus from './components/useDialogFocus';
 import { getSavedServers, saveServers, getActiveServerId, saveActiveServerId, getSettings, saveSettings } from './services/storageService';
+import { resolveCommunityLinks } from './shared/communityLinks';
 import { queryServerInfo } from './services/fivemService';
 import CityBackground from './components/CityBackground';
 import audioService from './services/audioService';
@@ -39,7 +42,8 @@ import {
   sendGameInvite,
   sendHeartbeat,
   toggleFavoriteFriend,
-  toggleRemoteFavoriteServer
+  toggleRemoteFavoriteServer,
+  updateSocialProfile
 } from './services/socialService';
 import { apiGet } from './services/apiService';
 import { subscribeSocialRealtime } from './services/socialRealtime';
@@ -75,6 +79,9 @@ export default function App() {
   const [social, setSocial] = useState(EMPTY_SOCIAL);
   const [gameEnv, setGameEnv] = useState(null);
   const [dismissedInvites, setDismissedInvites] = useState({});
+  const alertSeqRef = useRef(1);
+  const [dismissedAlerts, setDismissedAlerts] = useState({});
+  const [uiNotice, setUiNotice] = useState(null);
   const [confirmState, setConfirmState] = useState(null);
   const requestConfirm = useCallback(opts => setConfirmState(opts), []);
   const closeConfirm = useCallback(() => setConfirmState(null), []);
@@ -321,6 +328,41 @@ export default function App() {
     await refreshSocial();
   };
 
+  const handleUpdateProfile = async payload => {
+    const res = await updateSocialProfile(payload, settings.socialServerUrl);
+    if (res?.user) {
+      setSocial(prev => ({ ...prev, user: res.user }));
+    }
+    return res;
+  };
+
+  const communityLinks = resolveCommunityLinks(settings);
+
+  const handleOpenCommunityLink = async (channel, url) => {
+    if (!url) {
+      setUiNotice({
+        _seq: ++alertSeqRef.current,
+        tone: 'notice',
+        message: `ยังไม่ได้ตั้งค่าลิงก์ ${channel.thaiLabel} กรุณาเพิ่มลิงก์ในหน้าตั้งค่า`
+      });
+      setModal('settings');
+      return;
+    }
+    try {
+      if (window.estraWindow?.openExternal) {
+        await window.estraWindow.openExternal(url);
+      } else {
+        window.open(url, '_blank', 'noopener,noreferrer');
+      }
+    } catch (err) {
+      setUiNotice({
+        _seq: ++alertSeqRef.current,
+        tone: 'error',
+        message: err?.message || `ไม่สามารถเปิด ${channel.thaiLabel} ได้`
+      });
+    }
+  };
+
   const applySocialStateResponse = res => {
     if (!res) return;
     setSocial(prev => ({
@@ -395,13 +437,13 @@ export default function App() {
       const result = await prepareLaunch(target, preferences);
       if (result.serverInfo) setServers(prev => prev.map(s => s.id === target.id && s.ip === target.ip ? { ...s, ...result.serverInfo } : s));
       historyStore.finish(attempt, 'sent');
-      setLaunchFeedback({ message: result.message });
+      setLaunchFeedback({ message: result.message, _seq: ++alertSeqRef.current });
       if (social.authenticated) {
         void sendHeartbeat({ activeServer: { id: target.id, name: target.name, ip: target.ip } }, settings.socialServerUrl).catch(() => {});
       }
     } catch (error) {
       if (attempt) historyStore.finish(attempt, 'failed', error.message);
-      setLaunchFeedback({ error: error.message });
+      setLaunchFeedback({ error: error.message, _seq: ++alertSeqRef.current });
     } finally {
       launchLock.current = false; setLaunchBusy(false);
       void presenceService.checkPresence();
@@ -415,7 +457,21 @@ export default function App() {
   useEffect(() => {
     window.estraWindow?.setLatestCity({ name: latestCity?.name || '', enabled: !!latestCity && !launchBusy && !modal && !settingsBusy && !showPatcherScreen });
   }, [latestCity?.id, latestCity?.name, launchBusy, modal, settingsBusy, showPatcherScreen]);
-  useEffect(() => window.estraWindow?.onGameStatus(setGameNotice), []);
+  useEffect(() => window.estraWindow?.onGameStatus(payload => {
+    setGameNotice(payload ? { ...payload, _seq: ++alertSeqRef.current } : null);
+  }), []);
+
+  const handleDismissAlert = useCallback(id => {
+    if (id.startsWith('launch-')) {
+      setLaunchFeedback(null);
+      return;
+    }
+    if (id.startsWith('ui:')) {
+      setUiNotice(null);
+      return;
+    }
+    setDismissedAlerts(prev => ({ ...prev, [id]: true }));
+  }, []);
 
   useDialogFocus(modal, () => { if (!confirmState) setModal(null); });
   useEffect(() => { try { saveServers(servers); setStorageError(''); } catch { setStorageError('บันทึกข้อมูลไม่ได้ กรุณาอนุญาต browser storage การเปลี่ยนแปลงอาจหายเมื่อปิดหน้า'); } }, [servers]);
@@ -451,6 +507,74 @@ export default function App() {
     try { saveSettings(value); setSettings(value); setStorageError(''); }
     catch { setSettings(value); setStorageError('บันทึกการตั้งค่าไม่ได้ ค่าจะใช้ได้เฉพาะรอบนี้'); }
   };
+
+  const floatingAlerts = [];
+  if (launcherUpdate?.available && !dismissedAlerts[`update:${launcherUpdate.version}`]) {
+    floatingAlerts.push({
+      id: `update:${launcherUpdate.version}`,
+      tone: 'notice',
+      content: (
+        <>
+          มี Estra Launcher เวอร์ชันใหม่ v{launcherUpdate.version} พร้อมอัปเดต —{' '}
+          <button
+            type="button"
+            className="btn-inline-cobalt"
+            onClick={() => requestConfirm({
+              title: 'อัปเดต Estra Launcher',
+              message: `ต้องการดาวน์โหลดและติดตั้งเวอร์ชัน v${launcherUpdate.version} และรีสตาร์ทโปรแกรมใช่หรือไม่?`,
+              detail: 'ระบบจะตรวจสอบลายเซ็นความปลอดภัยก่อนติดตั้งอัตโนมัติ',
+              confirmLabel: 'อัปเดตเลย',
+              tone: 'primary',
+              onConfirm: () => installLauncherUpdate(DEFAULT_GITHUB_REPO)
+            })}
+          >
+            อัปเดตเลย
+          </button>{' '}
+          <button type="button" className="btn-inline-orange" onClick={() => setModal('patcher')}>
+            ดูรายละเอียด
+          </button>
+        </>
+      )
+    });
+  }
+  if (gameNotice && ['closed', 'startup-timeout', 'detection-error'].includes(gameNotice.state)) {
+    const gameAlertId = `game:${gameNotice._seq || 0}`;
+    if (!dismissedAlerts[gameAlertId]) {
+      floatingAlerts.push({
+        id: gameAlertId,
+        tone: gameNotice.state === 'detection-error' ? 'error' : 'notice',
+        content: gameNotice.message
+      });
+    }
+  }
+  if (launchFeedback?.error) {
+    floatingAlerts.push({
+      id: `launch-err:${launchFeedback._seq || 0}`,
+      tone: 'error',
+      content: launchFeedback.error
+    });
+  }
+  if (launchFeedback?.message) {
+    floatingAlerts.push({
+      id: `launch-msg:${launchFeedback._seq || 0}`,
+      tone: 'notice',
+      content: launchFeedback.message
+    });
+  }
+  if (uiNotice?.message) {
+    floatingAlerts.push({
+      id: `ui:${uiNotice._seq || 0}`,
+      tone: uiNotice.tone || 'notice',
+      content: uiNotice.message
+    });
+  }
+  if (history.error && !dismissedAlerts[`history:${history.error}`]) {
+    floatingAlerts.push({
+      id: `history:${history.error}`,
+      tone: 'error',
+      content: history.error
+    });
+  }
 
   return (
     <div className={`launcher-window${modalClosing ? ' modal-closing' : ''}`}>
@@ -490,6 +614,8 @@ export default function App() {
             hasLauncherUpdate={!!launcherUpdate?.available}
             social={social}
             onOpenAuth={openAuth}
+            communityLinks={communityLinks}
+            onOpenCommunityLink={handleOpenCommunityLink}
           />
 
           <div className="launcher-main">
@@ -508,34 +634,7 @@ export default function App() {
               />
             </div>
 
-            {launcherUpdate?.available && (
-              <p className="notice main-alert-strip" role="status">
-                มี Estra Launcher เวอร์ชันใหม่ v{launcherUpdate.version} พร้อมอัปเดต —{' '}
-                <button
-                  type="button"
-                  className="btn-inline-cobalt"
-                  onClick={() => requestConfirm({
-                    title: 'อัปเดต Estra Launcher',
-                    message: `ต้องการดาวน์โหลดและติดตั้งเวอร์ชัน v${launcherUpdate.version} และรีสตาร์ทโปรแกรมใช่หรือไม่?`,
-                    detail: 'ระบบจะตรวจสอบลายเซ็นความปลอดภัยก่อนติดตั้งอัตโนมัติ',
-                    confirmLabel: 'อัปเดตเลย',
-                    tone: 'primary',
-                    onConfirm: () => installLauncherUpdate(DEFAULT_GITHUB_REPO)
-                  })}
-                >
-                  อัปเดตเลย
-                </button>{' '}
-                <button type="button" className="btn-inline-orange" onClick={() => setModal('patcher')}>
-                  ดูรายละเอียด
-                </button>
-              </p>
-            )}
-            {gameNotice && ['closed', 'startup-timeout', 'detection-error'].includes(gameNotice.state) && (
-              <p className="notice main-alert-strip" role="status">{gameNotice.message}</p>
-            )}
-            {launchFeedback?.error && <p className="error-message main-alert-strip" role="alert">{launchFeedback.error}</p>}
-            {launchFeedback?.message && <p className="notice main-alert-strip" role="status">{launchFeedback.message}</p>}
-            {history.error && <p className="error-message main-alert-strip" role="alert">{history.error}</p>}
+            <AlertToastStack alerts={floatingAlerts} onDismiss={handleDismissAlert} />
 
             <MainLauncher
               key={active?.id || 'empty'}
@@ -626,10 +725,7 @@ export default function App() {
         if (!activeInvite) return null;
         return (
           <div className="game-invite-toast" role="status" aria-live="polite">
-            <div className="friend-avatar" style={{ background: activeInvite.fromUser?.avatarColor || '#2b6bf3' }}>
-              {(activeInvite.fromUser?.displayName || 'FR').slice(0, 2).toUpperCase()}
-              <span className={`presence-dot ${activeInvite.fromUser?.presence || 'online'}`} />
-            </div>
+            <UserAvatar user={activeInvite.fromUser} fallbackInitials="FR" showPresence />
             <div className="game-invite-toast-meta">
               <strong>{activeInvite.fromUser?.displayName || 'เพื่อน'} ชวนเล่นด้วยกัน</strong>
               <small>เมือง: {activeInvite.server?.name}</small>
@@ -645,7 +741,7 @@ export default function App() {
                     applySocialStateResponse(res);
                     handleJoinFriendServer(res?.inviteServer || activeInvite.server, { autoLaunch: true });
                   } catch (err) {
-                    setLaunchFeedback({ error: err.message });
+                    setLaunchFeedback({ error: err.message, _seq: ++alertSeqRef.current });
                   }
                 }}
               >
@@ -703,6 +799,7 @@ export default function App() {
         onRegister={handleRegister}
         onLogout={handleLogout}
         onChangeStatus={handleChangeStatus}
+        onUpdateProfile={handleUpdateProfile}
         onRequestConfirm={requestConfirm}
       />
       <MicTestModal isOpen={modal === 'mic'} onClose={() => setModal(null)} settings={settings} onSaveSettings={savePrefs} />

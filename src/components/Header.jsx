@@ -16,6 +16,7 @@ export default function Header({
 }) {
   const [presence, setPresence] = useState(presenceService.getPresence());
   const [notifOpen, setNotifOpen] = useState(false);
+  const [seenIds, setSeenIds] = useState(() => new Set());
   const notifRef = useRef(null);
 
   useEffect(() => presenceService.subscribe(setPresence), []);
@@ -28,7 +29,64 @@ export default function Header({
   }, []);
 
   const incomingCount = social?.incomingRequests?.length || 0;
-  const notifCount = (hasLauncherUpdate ? 1 : 0) + incomingCount + (gameNotice ? 1 : 0);
+  const incomingInvitesCount = social?.incomingInvites?.length || 0;
+  const notifItems = [];
+  if (hasLauncherUpdate && launcherUpdate?.version) {
+    notifItems.push({
+      id: `update:${launcherUpdate.version}`,
+      label: `มีอัปเดต Estra Launcher v${launcherUpdate.version}`,
+      actionLabel: 'เปิด Patcher',
+      onAction: () => { setNotifOpen(false); onOpenPatcher(); }
+    });
+  }
+  if (incomingCount > 0) {
+    const reqKey = (social?.incomingRequests || []).map(r => r.id).sort().join(',');
+    notifItems.push({
+      id: `requests:${reqKey}`,
+      label: `มีคำขอเป็นเพื่อนใหม่ ${incomingCount} รายการ`,
+      actionLabel: 'ดูคำขอ',
+      onAction: () => { setNotifOpen(false); onToggleFriendsMobile(); }
+    });
+  }
+  if (incomingInvitesCount > 0) {
+    const invKey = (social?.incomingInvites || []).map(inv => inv.id).sort().join(',');
+    notifItems.push({
+      id: `invites:${invKey}`,
+      label: `มีคำชวนเข้าเล่นเมืองด้วยกัน ${incomingInvitesCount} รายการ`,
+      actionLabel: 'ดูคำชวน',
+      onAction: () => { setNotifOpen(false); onToggleFriendsMobile(); }
+    });
+  }
+  if (gameNotice?.message) {
+    notifItems.push({
+      id: `game:${gameNotice._seq || 0}:${gameNotice.state || 'info'}:${gameNotice.message}`,
+      label: gameNotice.message
+    });
+  }
+
+  const activeIdKey = notifItems.map(item => item.id).join('|');
+  useEffect(() => {
+    const activeSet = new Set(notifItems.map(item => item.id));
+    setSeenIds(prev => {
+      let changed = false;
+      const next = new Set();
+      for (const id of prev) {
+        if (activeSet.has(id)) next.add(id);
+        else changed = true;
+      }
+      if (notifOpen) {
+        for (const id of activeSet) {
+          if (!next.has(id)) {
+            next.add(id);
+            changed = true;
+          }
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [notifOpen, activeIdKey]);
+
+  const unreadCount = notifItems.filter(item => !seenIds.has(item.id)).length;
 
   return (
     <header className="main-header" data-tauri-drag-region>
@@ -73,42 +131,41 @@ export default function Header({
             className="header-icon-btn"
             aria-label="การแจ้งเตือน"
             aria-expanded={notifOpen}
-            onClick={() => setNotifOpen(v => !v)}
+            onClick={() => {
+              const nextOpen = !notifOpen;
+              if (nextOpen && notifItems.length > 0) {
+                setSeenIds(prev => {
+                  const next = new Set(prev);
+                  for (const item of notifItems) next.add(item.id);
+                  return next;
+                });
+              }
+              setNotifOpen(nextOpen);
+            }}
           >
             <Bell size={16} />
-            {notifCount > 0 && <span className="notif-badge">{notifCount}</span>}
+            {unreadCount > 0 && <span className="notif-badge">{unreadCount}</span>}
           </button>
           {notifOpen && (
             <div className="notif-popover" role="region" aria-label="รายการแจ้งเตือน">
               <div className="notif-popover-head">
                 <strong>การแจ้งเตือน</strong>
-                <span>{notifCount} รายการ</span>
+                <span>{notifItems.length} รายการ</span>
               </div>
-              {notifCount === 0 ? (
-                <p className="notif-empty">ไม่มีการแจ้งเตือนใหม่ในขณะนี้</p>
+              {notifItems.length === 0 ? (
+                <p className="notif-empty">ไม่มีการแจ้งเตือนในขณะนี้</p>
               ) : (
                 <ul className="notif-list">
-                  {hasLauncherUpdate && (
-                    <li>
-                      <span>มีอัปเดต Estra Launcher v{launcherUpdate?.version}</span>
-                      <button type="button" className="btn-inline-cobalt" onClick={() => { setNotifOpen(false); onOpenPatcher(); }}>
-                        เปิด Patcher
-                      </button>
+                  {notifItems.map(item => (
+                    <li key={item.id}>
+                      <span>{item.label}</span>
+                      {item.actionLabel && (
+                        <button type="button" className="btn-inline-cobalt" onClick={item.onAction}>
+                          {item.actionLabel}
+                        </button>
+                      )}
                     </li>
-                  )}
-                  {incomingCount > 0 && (
-                    <li>
-                      <span>มีคำขอเป็นเพื่อนใหม่ {incomingCount} รายการ</span>
-                      <button type="button" className="btn-inline-cobalt" onClick={() => { setNotifOpen(false); onToggleFriendsMobile(); }}>
-                        ดูคำขอ
-                      </button>
-                    </li>
-                  )}
-                  {gameNotice?.message && (
-                    <li>
-                      <span>{gameNotice.message}</span>
-                    </li>
-                  )}
+                  ))}
                 </ul>
               )}
               {!social?.authenticated && (

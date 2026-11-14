@@ -13,6 +13,8 @@ import {
   resolveSocialServerUrl
 } from '../src/shared/supabaseConfig.js';
 import { DEFAULT_SETTINGS } from '../src/services/storageService.js';
+import { validateAvatarUrl } from '../src/shared/profileAvatar.js';
+import { sanitizeExternalUrl } from '../src/shared/communityLinks.js';
 
 test('socialStore handles register, password hashing, login, friend requests, presence, and favorites', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'estra-social-'));
@@ -268,4 +270,68 @@ test('Supabase social proxy stores tokens in HttpOnly cookies, strips response t
   });
   assert.equal(rlRes.status, 429);
   assert.equal(rlRes.headers.get('retry-after'), '42');
+});
+
+test('validateAvatarUrl, socialStore.updateProfile, and /api/social/profile-update enforce safe avatar handling', async t => {
+  assert.equal(validateAvatarUrl('').valid, true);
+  assert.equal(validateAvatarUrl('https://cdn.example.com/avatar.png').valid, true);
+  assert.equal(validateAvatarUrl('data:image/png;base64,iVBORw0KGgo=').valid, true);
+  assert.equal(validateAvatarUrl('data:image/svg+xml;base64,PHN2Zz4=').valid, false);
+  assert.equal(validateAvatarUrl('javascript:alert(1)').valid, false);
+  assert.equal(validateAvatarUrl('http://insecure.example.com/a.png').valid, false);
+
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'estra-avatar-'));
+  const dbPath = path.join(dir, 'social.db');
+  const store = createSocialStore({ dbPath });
+  const middleware = createApi({ socialStore: store });
+  const server = http.createServer(middleware);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    await new Promise(resolve => server.close(resolve));
+    store.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const { token } = await fetch(`${base}/api/session`).then(r => r.json());
+  const regRes = await fetch(`${base}/api/social/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Launcher-Token': token, 'X-Social-Server': LOCAL_SOCIAL_SENTINEL },
+    body: JSON.stringify({ username: 'avatar_tester', password: 'password123', displayName: 'BeforeName' })
+  });
+  assert.equal(regRes.status, 200);
+  const cookieHeader = regRes.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
+
+  const badRes = await fetch(`${base}/api/social/profile-update`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Launcher-Token': token, 'X-Social-Server': LOCAL_SOCIAL_SENTINEL, Cookie: cookieHeader },
+    body: JSON.stringify({ avatarUrl: 'data:image/svg+xml;base64,PHN2Zz4=' })
+  });
+  assert.equal(badRes.status, 400);
+
+  const validDataUrl = 'data:image/png;base64,' + 'A'.repeat(20000);
+  const okRes = await fetch(`${base}/api/social/profile-update`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Launcher-Token': token, 'X-Social-Server': LOCAL_SOCIAL_SENTINEL, Cookie: cookieHeader },
+    body: JSON.stringify({ displayName: 'AfterName', avatarColor: '#10b981', avatarUrl: validDataUrl })
+  });
+  assert.equal(okRes.status, 200);
+  const okJson = await okRes.json();
+  assert.equal(okJson.user.displayName, 'AfterName');
+  assert.equal(okJson.user.avatarColor, '#10b981');
+  assert.equal(okJson.user.avatarUrl, validDataUrl);
+
+  const meRes = await fetch(`${base}/api/social/me`, {
+    headers: { 'X-Social-Server': LOCAL_SOCIAL_SENTINEL, Cookie: cookieHeader }
+  }).then(r => r.json());
+  assert.equal(meRes.user.avatarUrl, validDataUrl);
+});
+
+test('sanitizeExternalUrl validates official community links safely', () => {
+  assert.equal(sanitizeExternalUrl('https://estra.example.com/home'), 'https://estra.example.com/home');
+  assert.equal(sanitizeExternalUrl('discord.gg/estra'), 'https://discord.gg/estra');
+  assert.equal(sanitizeExternalUrl('javascript:alert(1)'), '');
+  assert.equal(sanitizeExternalUrl('//evil.example.com'), '');
+  assert.equal(sanitizeExternalUrl('not a url'), '');
+  assert.equal(sanitizeExternalUrl('https://user:pass@example.com'), '');
 });

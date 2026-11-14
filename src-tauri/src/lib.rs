@@ -261,6 +261,31 @@ fn window_close_cmd(app: AppHandle) {
 }
 
 #[tauri::command]
+fn open_external_url_cmd(url: String) -> Result<(), String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() || trimmed.len() > 500 || trimmed.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err("ลิงก์ไม่ถูกต้อง".to_string());
+    }
+    let parsed = url::Url::parse(trimmed).map_err(|_| "รูปแบบลิงก์ไม่ถูกต้อง".to_string())?;
+    if !matches!(parsed.scheme(), "https" | "http") || !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("รองรับเฉพาะลิงก์ https:// หรือ http:// เท่านั้น".to_string());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer.exe")
+            .arg(parsed.as_str())
+            .spawn()
+            .map_err(|e| format!("ไม่สามารถเปิดเบราว์เซอร์ได้: {e}"))?;
+        return Ok(());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = parsed;
+        Err("รองรับการเปิดลิงก์อัตโนมัติบน Windows".to_string())
+    }
+}
+
+#[tauri::command]
 async fn social_request_cmd(
     state: State<'_, AppState>,
     method: String,
@@ -374,6 +399,7 @@ pub fn run() {
             window_hide_cmd,
             window_toggle_maximize_cmd,
             window_close_cmd,
+            open_external_url_cmd,
             social_request_cmd,
         ])
         .run(tauri::generate_context!())

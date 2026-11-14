@@ -12,6 +12,7 @@ export function initDesktopBridge() {
     hideToTray: () => { void invoke('window_hide_cmd'); },
     toggleMaximize: () => { void invoke('window_toggle_maximize_cmd'); },
     close: () => { void invoke('window_close_cmd'); },
+    openExternal: url => invoke('open_external_url_cmd', { url }),
     setLatestCity: state => {
       void invoke('set_latest_city_cmd', { name: state?.name || '', enabled: !!state?.enabled });
     },

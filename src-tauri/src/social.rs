@@ -25,6 +25,8 @@ struct StoredUser {
     friend_code: String,
     password_hash: String,
     avatar_color: String,
+    #[serde(default)]
+    avatar_url: Option<String>,
     status_pref: String,
     #[serde(default)]
     is_demo: bool,
@@ -316,6 +318,7 @@ fn public_user(u: &StoredUser, now: u64, include_private: bool) -> Value {
         "displayName": u.display_name,
         "friendCode": u.friend_code,
         "avatarColor": u.avatar_color,
+        "avatarUrl": u.avatar_url.clone().unwrap_or_default(),
         "presence": presence,
         "isDemo": u.is_demo,
         "currentServer": current_server,
@@ -506,6 +509,7 @@ fn handle_local(state: &SocialState, path: &str, body: Value) -> Result<Value, S
                 friend_code,
                 password_hash: stretch_hash(password, &salt),
                 avatar_color: AVATAR_PALETTE[color_idx].to_string(),
+                avatar_url: None,
                 status_pref: "online".to_string(),
                 is_demo: false,
                 last_seen_ms: now,
@@ -654,6 +658,63 @@ fn handle_local(state: &SocialState, path: &str, body: Value) -> Result<Value, S
                     let user = db.users[idx].clone();
                     save_db(&db)?;
                     Ok(json!({ "success": true, "user": public_user(&user, now, true) }))
+                }
+                "/api/social/profile-update" => {
+                    let idx = db
+                        .users
+                        .iter()
+                        .position(|u| u.id == uid)
+                        .ok_or_else(|| "ไม่พบบัญชีผู้ใช้".to_string())?;
+                    if let Some(dn) = body["displayName"].as_str() {
+                        db.users[idx].display_name =
+                            validate_display_name(Some(dn), &db.users[idx].display_name)?;
+                    }
+                    if let Some(col) = body["avatarColor"].as_str() {
+                        let clean_col = col.trim().to_lowercase();
+                        if !AVATAR_PALETTE.contains(&clean_col.as_str()) {
+                            return Err("สีโปรไฟล์ไม่ถูกต้อง".to_string());
+                        }
+                        db.users[idx].avatar_color = clean_col;
+                    }
+                    if let Some(raw_url) = body.get("avatarUrl") {
+                        if raw_url.is_null() {
+                            db.users[idx].avatar_url = None;
+                        } else if let Some(s) = raw_url.as_str() {
+                            let val = s.trim();
+                            if val.is_empty() {
+                                db.users[idx].avatar_url = None;
+                            } else if val.to_lowercase().starts_with("data:image/svg+xml") {
+                                return Err("ไม่รองรับไฟล์ SVG สำหรับรูปโปรไฟล์".to_string());
+                            } else if val.to_lowercase().starts_with("data:image/") {
+                                let valid_prefix = ["data:image/png;base64,", "data:image/jpeg;base64,", "data:image/jpg;base64,", "data:image/webp;base64,"]
+                                    .iter()
+                                    .any(|p| val.len() > p.len() && val[..p.len()].eq_ignore_ascii_case(p));
+                                if !valid_prefix || val.len() > 45_000 || val.chars().any(|c| c.is_whitespace()) {
+                                    return Err("รูปโปรไฟล์ไม่ถูกต้องหรือมีขนาดใหญ่เกินกำหนด".to_string());
+                                }
+                                db.users[idx].avatar_url = Some(val.to_string());
+                            } else {
+                                if val.len() > 500 || val.chars().any(|c| c.is_whitespace()) {
+                                    return Err("ลิงก์รูปโปรไฟล์ต้องเป็น HTTPS ความยาวไม่เกิน 500 ตัวอักษร".to_string());
+                                }
+                                let parsed = Url::parse(val)
+                                    .map_err(|_| "รูปแบบลิงก์รูปโปรไฟล์ไม่ถูกต้อง".to_string())?;
+                                if parsed.scheme() != "https" || !parsed.username().is_empty() || parsed.password().is_some() {
+                                    return Err("ลิงก์รูปโปรไฟล์ต้องขึ้นต้นด้วย https://".to_string());
+                                }
+                                db.users[idx].avatar_url = Some(parsed.to_string());
+                            }
+                        } else {
+                            return Err("ข้อมูลรูปโปรไฟล์ไม่ถูกต้อง".to_string());
+                        }
+                    }
+                    let user = db.users[idx].clone();
+                    save_db(&db)?;
+                    Ok(json!({
+                        "success": true,
+                        "user": public_user(&user, now, true),
+                        "message": "บันทึกข้อมูลโปรไฟล์แล้ว"
+                    }))
                 }
                 "/api/social/friend-request" => {
                     let target = body["target"].as_str().unwrap_or("").trim();
@@ -829,6 +890,7 @@ fn handle_local(state: &SocialState, path: &str, body: Value) -> Result<Value, S
                                 friend_code: code.to_string(),
                                 password_hash: "demo-locked".to_string(),
                                 avatar_color: color.to_string(),
+                                avatar_url: None,
                                 status_pref: pref.to_string(),
                                 is_demo: true,
                                 last_seen_ms: now,

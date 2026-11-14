@@ -34,6 +34,10 @@ export async function sendHeartbeat(payload, socialServerUrl) {
   return apiPost('/api/social/heartbeat', payload, socialHeaders(socialServerUrl));
 }
 
+export async function updateSocialProfile(payload, socialServerUrl) {
+  return apiPost('/api/social/profile-update', payload, socialHeaders(socialServerUrl));
+}
+
 export async function sendFriendRequest(target, socialServerUrl) {
   return apiPost('/api/social/friend-request', { target }, socialHeaders(socialServerUrl));
 }
