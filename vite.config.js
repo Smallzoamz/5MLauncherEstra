@@ -7,7 +7,7 @@ const pkg = JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url
 
 export default defineConfig({
   define: {
-    __ESTRA_APP_VERSION__: JSON.stringify(pkg.version || '2.1.2')
+    __ESTRA_APP_VERSION__: JSON.stringify(pkg.version || '2.1.3')
   },
   plugins: [react(), {
     name: 'local-launcher-api',

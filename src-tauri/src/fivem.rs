@@ -1196,7 +1196,7 @@ pub async fn install_fivem_bootstrap(target_dir: &str) -> Result<InstallFiveMRes
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(90))
-        .user_agent("EstraFiveMLauncher/2.1.2")
+        .user_agent("EstraFiveMLauncher/2.1.3")
         .build()
         .map_err(|e| format!("สร้างตัวดาวน์โหลดไม่สำเร็จ: {e}"))?;
     let resp = client
