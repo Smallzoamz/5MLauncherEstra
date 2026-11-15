@@ -10,6 +10,10 @@ const STORAGE_KEY_ONBOARDING_GUIDE_SEEN = 'estra_onboarding_guide_seen_v1';
 export const DEFAULT_SETTINGS = {
   fivemPath: '', autoClearCacheBeforeLaunch: false, checkMicBeforeLaunch: true,
   requireSteamDiscordBeforeLaunch: false, runOnWindowsStartup: false, preferredAudioDeviceId: 'default',
+  screenshotEnabled: true, screenshotHotkey: 'F12', screenshotOnlyInGame: false,
+  screenshotPlaySound: true, screenshotDir: '',
+  overlayNotificationsEnabled: true, overlayNotifyScreenshot: true,
+  overlayNotifyFriendOnline: true, overlayNotifyFriendInGame: true,
   githubRepo: DEFAULT_GITHUB_REPO, socialServerUrl: SUPABASE_SOCIAL_GATEWAY_URL,
   websiteUrl: 'https://estralauncher.vercel.app/',
   discordUrl: 'https://discord.gg/WYjfK6FWgB',

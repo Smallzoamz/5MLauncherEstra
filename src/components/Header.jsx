@@ -118,6 +118,15 @@ export default function Header({
           กิจกรรม &amp; ระบบ
           {centerTab === 'discover' && <span className="nav-dot" />}
         </button>
+        <button
+          type="button"
+          className={centerTab === 'screenshots' ? 'active' : ''}
+          aria-pressed={centerTab === 'screenshots'}
+          onClick={() => onChangeTab('screenshots')}
+        >
+          คลังภาพ
+          {centerTab === 'screenshots' && <span className="nav-dot" />}
+        </button>
       </nav>
 
       <div className="accounts-section" data-tauri-drag-region>

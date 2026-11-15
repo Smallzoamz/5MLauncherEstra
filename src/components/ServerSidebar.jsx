@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowRight,
   BookOpen,
+  Camera,
   ChevronDown,
   Gamepad2,
   Globe,
@@ -170,6 +171,15 @@ export default function ServerSidebar({
       <div className="rail-section">
         <span className="rail-section-label">My tools</span>
         <div className="rail-tools-list">
+          <button
+            type="button"
+            className={`rail-tool-item${centerTab === 'screenshots' ? ' active' : ''}`}
+            onClick={() => onChangeTab('screenshots')}
+            aria-label="คลังภาพหน้าจอ"
+          >
+            <Camera size={15} />
+            <span>คลังภาพหน้าจอ</span>
+          </button>
           <button
             type="button"
             className="rail-tool-item"

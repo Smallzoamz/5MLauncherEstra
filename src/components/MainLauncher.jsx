@@ -6,6 +6,7 @@ import { bannerImageUrl } from '../shared/serverMedia';
 import { cityBackdrop } from '../shared/cityBackdrop';
 import MicIndicator from './MicIndicator';
 import ServerAvatar from './ServerAvatar';
+import ScreenshotsGallery from './ScreenshotsGallery';
 import { APP_VERSION, normalizePatchManifestUrl } from '../shared/patcherConfig';
 import {
   BookOpen,
@@ -50,6 +51,9 @@ export default function MainLauncher({
   historyEntries = [],
   social,
   launcherUpdate,
+  screenshotCaptureVersion = 0,
+  onRequestConfirm,
+  onNotify,
   busy,
   onLaunch
 }) {
@@ -63,6 +67,20 @@ export default function MainLauncher({
   const [presence, setPresence] = useState(presenceService.getPresence());
 
   useEffect(() => presenceService.subscribe(setPresence), []);
+
+  if (centerTab === 'screenshots') {
+    return (
+      <main className="main-content">
+        <ScreenshotsGallery
+          settings={settings}
+          captureVersion={screenshotCaptureVersion}
+          onOpenSettings={onOpenSettings}
+          onRequestConfirm={onRequestConfirm}
+          onNotify={onNotify}
+        />
+      </main>
+    );
+  }
 
   if (!server) {
     return (

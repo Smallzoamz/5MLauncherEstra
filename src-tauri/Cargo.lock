@@ -1016,11 +1016,12 @@ dependencies = [
 
 [[package]]
 name = "estra-fivem-launcher"
-version = "2.2.0"
+version = "2.2.1"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
  "hex",
+ "png",
  "regex",
  "reqwest 0.12.28",
  "rusty-leveldb",

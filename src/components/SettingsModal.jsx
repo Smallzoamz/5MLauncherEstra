@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { apiGet, apiPost } from '../services/apiService';
 import { generateCitizenFXIni } from '../services/fivemService';
 import { APP_VERSION } from '../shared/patcherConfig';
+import { SCREENSHOT_HOTKEYS } from '../services/screenshotService';
+import { playOverlayFriendChime, pushOverlayNotification } from '../services/overlayService';
 import MaintenanceSettings from './MaintenanceSettings';
 
 export default function SettingsModal({ isOpen, onClose, settings, onSaveSettings, activeServer, onMaintenanceBusy, gameEnv, onGameEnvUpdate, onRequestConfirm }) {
@@ -174,6 +176,116 @@ export default function SettingsModal({ isOpen, onClose, settings, onSaveSetting
         ['autoClearCacheBeforeLaunch', 'ล้างแคชก่อนเปิดเกม', 'ลบแคชเซิร์ฟเวอร์ทุกครั้งที่กดเล่น ต้องปิด FiveM ก่อน'],
         ['requireSteamDiscordBeforeLaunch', 'กำหนดให้เปิด Steam และ Discord ก่อนเล่น', 'เปิดตัวเลือกนี้เมื่อเซิร์ฟเวอร์ของคุณกำหนดให้ใช้']
       ].map(([key, title, help]) => <label className="setting-row" key={key}><span>{title}<small className="help-text">{help}</small></span><input type="checkbox" disabled={busy} checked={Boolean(form[key])} onChange={e => setForm({ ...form, [key]: e.target.checked })} /></label>)}
+
+      <details className="configuration-panel patch-template-panel">
+        <summary>
+          <span>จับภาพหน้าจอแบบ Steam (Screen Capture · {form.screenshotHotkey || 'F12'})</span>
+        </summary>
+        <div className="patch-template-body">
+          <label className="setting-row">
+            <span>เปิดใช้คีย์ลัดจับภาพหน้าจอ<small className="help-text">กดปุ่มลัดเพื่อบันทึกรูปลงโฟลเดอร์ของโปรแกรมอัตโนมัติ (แนะนำให้เกมใช้ Windowed / Borderless)</small></span>
+            <input type="checkbox" disabled={busy} checked={form.screenshotEnabled !== false} onChange={e => setForm({ ...form, screenshotEnabled: e.target.checked })} />
+          </label>
+          <div style={{ marginTop: 10 }}>
+            <label htmlFor="screenshot-hotkey">ปุ่มคีย์ลัดจับภาพ</label>
+            <div className="input-container">
+              <select
+                id="screenshot-hotkey"
+                disabled={busy || form.screenshotEnabled === false}
+                value={form.screenshotHotkey || 'F12'}
+                onChange={e => setForm({ ...form, screenshotHotkey: e.target.value })}
+              >
+                {SCREENSHOT_HOTKEYS.map(item => (
+                  <option key={item.value} value={item.value}>{item.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <label className="setting-row" style={{ marginTop: 10 }}>
+            <span>จับภาพเฉพาะตอนเปิด FiveM อยู่เท่านั้น<small className="help-text">หากปิดไว้ จะสามารถกด {form.screenshotHotkey || 'F12'} เพื่อแคปภาพหน้าจอได้ตลอดเวลาแม้ยังไม่ได้เข้าเกม</small></span>
+            <input type="checkbox" disabled={busy || form.screenshotEnabled === false} checked={Boolean(form.screenshotOnlyInGame)} onChange={e => setForm({ ...form, screenshotOnlyInGame: e.target.checked })} />
+          </label>
+          <label className="setting-row">
+            <span>เล่นเสียงชัตเตอร์และแจ้งเตือนเมื่อถ่ายภาพ<small className="help-text">ส่งเสียงคลิกเบาๆ เมื่อบันทึกภาพหน้าจอสำเร็จ</small></span>
+            <input type="checkbox" disabled={busy} checked={form.screenshotPlaySound !== false} onChange={e => setForm({ ...form, screenshotPlaySound: e.target.checked })} />
+          </label>
+          <div style={{ marginTop: 10 }}>
+            <label htmlFor="screenshot-dir">โฟลเดอร์เก็บรูปภาพ (เว้นว่างเพื่อใช้โฟลเดอร์ของโปรแกรม)</label>
+            <div className="input-container">
+              <input
+                id="screenshot-dir"
+                disabled={busy}
+                value={form.screenshotDir || ''}
+                onChange={e => setForm({ ...form, screenshotDir: e.target.value })}
+                placeholder="ค่าเริ่มต้น: โฟลเดอร์ screenshots ภายใน AppData ของ Estra"
+              />
+              {window.estraWindow?.openScreenshotsFolder && (
+                <button
+                  type="button"
+                  className="btn-action-refresh"
+                  disabled={busy}
+                  onClick={() => {
+                    void window.estraWindow.openScreenshotsFolder(form.screenshotDir || null).catch(err => setMessage(err?.message || 'เปิดโฟลเดอร์ไม่สำเร็จ'));
+                  }}
+                >
+                  เปิดโฟลเดอร์
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <details className="configuration-panel patch-template-panel">
+        <summary>
+          <span>Overlay Notification แบบ Steam (มุมขวาล่างขณะเปิดเกม)</span>
+        </summary>
+        <div className="patch-template-body">
+          <label className="setting-row">
+            <span>เปิดใช้หน้าต่าง Overlay แจ้งเตือน<small className="help-text">แสดง popup มุมขวาล่างโดยไม่แย่งโฟกัสหรือคลิกเมาส์ขณะเล่นเกม (รองรับโหมด Windowed / Borderless)</small></span>
+            <input type="checkbox" disabled={busy} checked={form.overlayNotificationsEnabled !== false} onChange={e => setForm({ ...form, overlayNotificationsEnabled: e.target.checked })} />
+          </label>
+          <label className="setting-row">
+            <span>แจ้งเตือนเมื่อแคปภาพหน้าจอสำเร็จ<small className="help-text">แสดงตัวอย่างภาพที่เพิ่งถ่ายพร้อมชื่อไฟล์ทันทีเมื่อกด {form.screenshotHotkey || 'F12'}</small></span>
+            <input type="checkbox" disabled={busy || form.overlayNotificationsEnabled === false} checked={form.overlayNotifyScreenshot !== false} onChange={e => setForm({ ...form, overlayNotifyScreenshot: e.target.checked })} />
+          </label>
+          <label className="setting-row">
+            <span>แจ้งเตือนเมื่อเพื่อนออนไลน์<small className="help-text">แจ้งเตือนเมื่อมีเพื่อนล็อกอินเข้าใช้งาน Estra Launcher</small></span>
+            <input type="checkbox" disabled={busy || form.overlayNotificationsEnabled === false} checked={form.overlayNotifyFriendOnline !== false} onChange={e => setForm({ ...form, overlayNotifyFriendOnline: e.target.checked })} />
+          </label>
+          <label className="setting-row">
+            <span>แจ้งเตือนเมื่อเพื่อนกำลังเข้าเมือง<small className="help-text">แสดงชื่อเพื่อนและชื่อเมือง FiveM ที่เพื่อนกำลังเข้าเล่น</small></span>
+            <input type="checkbox" disabled={busy || form.overlayNotificationsEnabled === false} checked={form.overlayNotifyFriendInGame !== false} onChange={e => setForm({ ...form, overlayNotifyFriendInGame: e.target.checked })} />
+          </label>
+          <div className="settings-actions" style={{ justifyContent: 'flex-start', marginTop: 10 }}>
+            <button
+              type="button"
+              className="btn-action-refresh"
+              disabled={busy}
+              onClick={() => {
+                if (form.screenshotPlaySound !== false) playOverlayFriendChime();
+                void pushOverlayNotification(
+                  {
+                    id: `test-overlay-${Date.now()}`,
+                    kind: 'friend-in-game',
+                    badge: 'เพื่อนกำลังเข้าเล่น',
+                    title: 'Estra Friend (ทดสอบ)',
+                    subtitle: `กำลังเข้าเมือง ${activeServer?.name || 'Estra City RP'}`,
+                    detail: activeServer?.ip || 'cfx.re/join/estra',
+                    imageUrl: '',
+                    initials: 'EF',
+                    accentColor: '#2b6bf3',
+                    durationMs: 4500
+                  },
+                  { force: true }
+                ).catch(err => setMessage(err?.message || 'ไม่สามารถแสดง Overlay ทดสอบได้'));
+              }}
+            >
+              ทดสอบแจ้งเตือน Overlay
+            </button>
+          </div>
+        </div>
+      </details>
       <button type="button" className="btn-action-refresh" disabled={!activeServer?.gameBuild} onClick={exportIni}>ดาวน์โหลดตัวอย่าง Game Build (.ini)</button>
       {message && <p role="status" className="notice">{message}</p>}
       <MaintenanceSettings fivemPath={form.fivemPath} onBusyChange={value => { setMaintenanceBusy(value); onMaintenanceBusy?.(value); }} onRequestConfirm={onRequestConfirm} />

@@ -37,6 +37,52 @@ export function initDesktopBridge() {
         else unlisten();
       });
       return () => { active = false; unlistenFn?.(); };
+    },
+    setScreenshotConfig: config => invoke('set_screenshot_config_cmd', { config }),
+    captureScreenshot: () => invoke('capture_screenshot_cmd'),
+    listScreenshots: dir => invoke('list_screenshots_cmd', { dir: dir || null }),
+    readScreenshotDataUrl: (filename, maxWidth = null, dir = null) =>
+      invoke('read_screenshot_data_url_cmd', { filename, maxWidth, dir: dir || null }),
+    copyScreenshotToClipboard: (filename, dir = null) =>
+      invoke('copy_screenshot_to_clipboard_cmd', { filename, dir: dir || null }),
+    deleteScreenshot: (filename, dir = null) =>
+      invoke('delete_screenshot_cmd', { filename, dir: dir || null }),
+    openScreenshotsFolder: (dir = null) =>
+      invoke('open_screenshots_folder_cmd', { dir: dir || null }),
+    onScreenshotCaptured: callback => {
+      if (typeof callback !== 'function') return () => {};
+      let active = true;
+      let unlistenFn = null;
+      void listen('estra://screenshot-captured', event => { if (active) callback(event.payload); }).then(unlisten => {
+        if (active) unlistenFn = unlisten;
+        else unlisten();
+      });
+      return () => { active = false; unlistenFn?.(); };
+    },
+    onScreenshotError: callback => {
+      if (typeof callback !== 'function') return () => {};
+      let active = true;
+      let unlistenFn = null;
+      void listen('estra://screenshot-error', event => { if (active) callback(event.payload); }).then(unlisten => {
+        if (active) unlistenFn = unlisten;
+        else unlisten();
+      });
+      return () => { active = false; unlistenFn?.(); };
+    },
+    setOverlaySettings: settings => invoke('set_overlay_settings_cmd', { settings }),
+    pushOverlayNotification: (payload, force = false) =>
+      invoke('push_overlay_notification_cmd', { payload, force: Boolean(force) }),
+    drainOverlayPending: () => invoke('drain_overlay_pending_cmd'),
+    hideOverlayWindow: () => { void invoke('hide_overlay_window_cmd'); },
+    onOverlayNotify: callback => {
+      if (typeof callback !== 'function') return () => {};
+      let active = true;
+      let unlistenFn = null;
+      void listen('estra://overlay-notify', event => { if (active) callback(event.payload); }).then(unlisten => {
+        if (active) unlistenFn = unlisten;
+        else unlisten();
+      });
+      return () => { active = false; unlistenFn?.(); };
     }
   });
 }

@@ -25,6 +25,16 @@ import { queryServerInfo } from './services/fivemService';
 import CityBackground from './components/CityBackground';
 import audioService from './services/audioService';
 import presenceService from './services/presenceService';
+import { playShutterSound, syncScreenshotSettings } from './services/screenshotService';
+import {
+  detectFriendOverlayTransitions,
+  playOverlayFriendChime,
+  pushOverlayNotification,
+  shouldDeliverOverlay,
+  syncOverlaySettings
+} from './services/overlayService';
+import { isTauriDesktop } from './services/desktopBridge';
+import OverlayApp from './components/OverlayApp';
 import { prepareLaunch } from './services/prepareLaunch';
 import { createLaunchHistory, latestHistoryCity } from './services/launchHistory';
 import LaunchHistory from './components/LaunchHistory';
@@ -118,6 +128,10 @@ export default function App() {
   const [screenStage, setScreenStage] = useState('splash');
   const [presence, setPresence] = useState(presenceService.getPresence());
   const [directory, setDirectory] = useState(loadCachedServerDirectory);
+  const [screenshotCaptureVersion, setScreenshotCaptureVersion] = useState(0);
+  const friendOverlayMapRef = useRef(null);
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   const [guideFirstVisit, setGuideFirstVisit] = useState(() => !hasSeenOnboardingGuide());
   const mustChangePromptedRef = useRef(false);
   const guideAutoOpenedRef = useRef(false);
@@ -318,6 +332,77 @@ export default function App() {
       })
       .catch(() => {});
     return () => { activeDetect = false; };
+  }, []);
+
+  useEffect(() => {
+    void syncScreenshotSettings(settings, active?.name || '').catch(() => {});
+  }, [
+    settings.screenshotEnabled,
+    settings.screenshotHotkey,
+    settings.screenshotOnlyInGame,
+    settings.screenshotDir,
+    active?.name
+  ]);
+
+  useEffect(() => {
+    void syncOverlaySettings(settings).catch(() => {});
+  }, [
+    settings.overlayNotificationsEnabled,
+    settings.overlayNotifyScreenshot,
+    settings.overlayNotifyFriendOnline,
+    settings.overlayNotifyFriendInGame
+  ]);
+
+  useEffect(() => {
+    if (!social.authenticated) {
+      friendOverlayMapRef.current = null;
+      return;
+    }
+    if (social.loading) return;
+    const { nextMap, notifications } = detectFriendOverlayTransitions(
+      friendOverlayMapRef.current,
+      social.friends
+    );
+    friendOverlayMapRef.current = nextMap;
+    if (!notifications.length) return;
+
+    const currentSettings = settingsRef.current;
+    const deliverable = notifications
+      .filter(item => shouldDeliverOverlay(currentSettings, item.kind, false))
+      .slice(0, 3);
+    if (!deliverable.length) return;
+
+    for (const item of deliverable) {
+      void pushOverlayNotification(item, { settings: currentSettings }).catch(() => {});
+    }
+    if (currentSettings?.screenshotPlaySound !== false) {
+      playOverlayFriendChime();
+    }
+  }, [social.authenticated, social.loading, social.friends]);
+
+  useEffect(() => {
+    const offCaptured = window.estraWindow?.onScreenshotCaptured?.(payload => {
+      setScreenshotCaptureVersion(v => v + 1);
+      if (settingsRef.current?.screenshotPlaySound !== false) {
+        playShutterSound();
+      }
+      setUiNotice({
+        message: payload?.message || 'บันทึกภาพหน้าจอแล้ว',
+        tone: 'notice',
+        _seq: ++alertSeqRef.current
+      });
+    });
+    const offError = window.estraWindow?.onScreenshotError?.(err => {
+      setUiNotice({
+        message: typeof err === 'string' ? err : err?.message || 'จับภาพหน้าจอไม่สำเร็จ',
+        tone: 'error',
+        _seq: ++alertSeqRef.current
+      });
+    });
+    return () => {
+      offCaptured?.();
+      offError?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -807,6 +892,9 @@ export default function App() {
               historyEntries={history.entries}
               social={social}
               launcherUpdate={launcherUpdate}
+              screenshotCaptureVersion={screenshotCaptureVersion}
+              onRequestConfirm={requestConfirm}
+              onNotify={(message, tone = 'notice') => setUiNotice({ message, tone, _seq: ++alertSeqRef.current })}
             />
           </div>
 
@@ -979,6 +1067,7 @@ export default function App() {
         onConfirm={confirmState?.onConfirm}
         onCancel={closeConfirm}
       />
+      {!isTauriDesktop() && <OverlayApp />}
     </div>
   );
 }

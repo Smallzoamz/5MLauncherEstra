@@ -1,6 +1,6 @@
 [package]
 name = "estra-fivem-launcher"
-version = "2.2.0"
+version = "2.2.1"
 description = "Estra FiveM Launcher for Windows"
 authors = ["Estra FiveM Launcher contributors"]
 edition = "2021"
@@ -29,6 +29,7 @@ regex = "1"
 rusty-leveldb = "4"
 winreg = "0.52"
 uuid = { version = "1", features = ["v4"] }
+png = "0.18"
 
 [profile.release]
 panic = "abort"

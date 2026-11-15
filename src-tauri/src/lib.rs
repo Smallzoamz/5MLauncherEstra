@@ -1,9 +1,11 @@
 pub mod file_safety;
 pub mod fivem;
 pub mod maintenance;
+pub mod overlay;
 pub mod patcher;
 pub mod player_name;
 pub mod presence;
+pub mod screenshots;
 pub mod session;
 pub mod social;
 pub mod startup;
@@ -21,7 +23,17 @@ use crate::patcher::{
     apply_city_patch, check_city_patch, check_launcher_update, install_launcher_update,
     LauncherUpdateCheck, PatchApplyResult, PatchCancelFlag, PatchCheckResult,
 };
+use crate::overlay::{
+    ensure_overlay_window, hide_overlay_window, push_overlay_notification, OverlayManager,
+    OverlayNotificationPayload, OverlaySettings,
+};
 use crate::presence::{get_system_presence, SystemPresence};
+use crate::screenshots::{
+    capture_screenshot_now, copy_screenshot_to_clipboard_by_dir, delete_screenshot_by_dir,
+    list_screenshots_in_dir, open_screenshots_folder, read_screenshot_data_url_by_dir,
+    resolve_screenshots_dir, start_hotkey_listener, CaptureScreenshotResult, ScreenshotConfig,
+    ScreenshotListResult, ScreenshotManager,
+};
 use crate::session::GameSessionMonitor;
 use crate::social::{social_request, SocialState};
 use crate::startup::{
@@ -42,6 +54,8 @@ pub struct AppState {
     pub tray_launch_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     pub latest_city_enabled: Mutex<bool>,
     pub social: SocialState,
+    pub screenshots: ScreenshotManager,
+    pub overlay: OverlayManager,
 }
 
 impl Default for AppState {
@@ -53,6 +67,8 @@ impl Default for AppState {
             tray_launch_item: Mutex::new(None),
             latest_city_enabled: Mutex::new(false),
             social: SocialState::default(),
+            screenshots: ScreenshotManager::default(),
+            overlay: OverlayManager::default(),
         }
     }
 }
@@ -221,6 +237,9 @@ fn set_latest_city_cmd(
     if let Ok(mut flag) = state.latest_city_enabled.lock() {
         *flag = active;
     }
+    if !name.trim().is_empty() {
+        state.screenshots.set_city_name(name.trim());
+    }
     if let Ok(guard) = state.tray_launch_item.lock() {
         if let Some(item) = guard.as_ref() {
             let label = if name.trim().is_empty() {
@@ -309,6 +328,128 @@ fn get_startup_settings_cmd() -> StartupSettingsState {
 #[tauri::command]
 fn set_startup_settings_cmd(enabled: bool) -> Result<StartupSettingsState, String> {
     set_startup_settings(enabled)
+}
+
+#[tauri::command]
+fn set_screenshot_config_cmd(
+    state: State<'_, AppState>,
+    config: ScreenshotConfig,
+) -> Result<ScreenshotConfig, String> {
+    state.screenshots.update_config(config)
+}
+
+#[tauri::command]
+async fn capture_screenshot_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<CaptureScreenshotResult, String> {
+    let manager = state.screenshots.clone();
+    let overlay = state.overlay.clone();
+    tokio::task::spawn_blocking(move || capture_screenshot_now(&app, &manager, Some(&overlay)))
+        .await
+        .map_err(|_| "จับภาพหน้าจอไม่สำเร็จ".to_string())?
+}
+
+#[tauri::command]
+async fn list_screenshots_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    dir: Option<String>,
+) -> Result<ScreenshotListResult, String> {
+    let custom_dir = dir.unwrap_or_else(|| state.screenshots.snapshot().dir);
+    tokio::task::spawn_blocking(move || {
+        let folder = resolve_screenshots_dir(&app, &custom_dir)?;
+        list_screenshots_in_dir(&folder)
+    })
+    .await
+    .map_err(|_| "โหลดรายการภาพหน้าจอไม่สำเร็จ".to_string())?
+}
+
+#[tauri::command]
+async fn read_screenshot_data_url_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    filename: String,
+    max_width: Option<u32>,
+    dir: Option<String>,
+) -> Result<String, String> {
+    let custom_dir = dir.unwrap_or_else(|| state.screenshots.snapshot().dir);
+    tokio::task::spawn_blocking(move || {
+        let folder = resolve_screenshots_dir(&app, &custom_dir)?;
+        read_screenshot_data_url_by_dir(&folder, &filename, max_width)
+    })
+    .await
+    .map_err(|_| "อ่านไฟล์ภาพหน้าจอไม่สำเร็จ".to_string())?
+}
+
+#[tauri::command]
+async fn copy_screenshot_to_clipboard_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    filename: String,
+    dir: Option<String>,
+) -> Result<(), String> {
+    let custom_dir = dir.unwrap_or_else(|| state.screenshots.snapshot().dir);
+    tokio::task::spawn_blocking(move || {
+        let folder = resolve_screenshots_dir(&app, &custom_dir)?;
+        copy_screenshot_to_clipboard_by_dir(&folder, &filename)
+    })
+    .await
+    .map_err(|_| "คัดลอกภาพหน้าจอไม่สำเร็จ".to_string())?
+}
+
+#[tauri::command]
+async fn delete_screenshot_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    filename: String,
+    dir: Option<String>,
+) -> Result<(), String> {
+    let custom_dir = dir.unwrap_or_else(|| state.screenshots.snapshot().dir);
+    tokio::task::spawn_blocking(move || {
+        let folder = resolve_screenshots_dir(&app, &custom_dir)?;
+        delete_screenshot_by_dir(&folder, &filename)
+    })
+    .await
+    .map_err(|_| "ลบไฟล์ภาพหน้าจอไม่สำเร็จ".to_string())?
+}
+
+#[tauri::command]
+fn open_screenshots_folder_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    dir: Option<String>,
+) -> Result<String, String> {
+    let custom_dir = dir.unwrap_or_else(|| state.screenshots.snapshot().dir);
+    open_screenshots_folder(&app, &custom_dir)
+}
+
+#[tauri::command]
+fn set_overlay_settings_cmd(
+    state: State<'_, AppState>,
+    settings: OverlaySettings,
+) -> Result<OverlaySettings, String> {
+    state.overlay.update_settings(settings)
+}
+
+#[tauri::command]
+fn push_overlay_notification_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    payload: OverlayNotificationPayload,
+    force: Option<bool>,
+) -> Result<bool, String> {
+    push_overlay_notification(&app, &state.overlay, payload, force.unwrap_or(false))
+}
+
+#[tauri::command]
+fn drain_overlay_pending_cmd(state: State<'_, AppState>) -> Vec<OverlayNotificationPayload> {
+    state.overlay.drain_pending()
+}
+
+#[tauri::command]
+fn hide_overlay_window_cmd(app: AppHandle) {
+    hide_overlay_window(&app);
 }
 
 pub fn run() {
@@ -403,6 +544,13 @@ pub fn run() {
             if !launched_autostart {
                 restore_main_window(&app.handle());
             }
+            let _ = ensure_overlay_window(&app.handle());
+            let app_state = app.state::<AppState>();
+            start_hotkey_listener(
+                app.handle().clone(),
+                app_state.screenshots.clone(),
+                app_state.overlay.clone(),
+            );
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -429,6 +577,17 @@ pub fn run() {
             social_request_cmd,
             get_startup_settings_cmd,
             set_startup_settings_cmd,
+            set_screenshot_config_cmd,
+            capture_screenshot_cmd,
+            list_screenshots_cmd,
+            read_screenshot_data_url_cmd,
+            copy_screenshot_to_clipboard_cmd,
+            delete_screenshot_cmd,
+            open_screenshots_folder_cmd,
+            set_overlay_settings_cmd,
+            push_overlay_notification_cmd,
+            drain_overlay_pending_cmd,
+            hide_overlay_window_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Estra FiveM Launcher");
