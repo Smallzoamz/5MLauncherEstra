@@ -163,7 +163,7 @@ export default function SettingsModal({ isOpen, onClose, settings, onSaveSetting
             )}
           </div>
           <small className="help-text">
-            ดาวน์โหลด FiveM.exe ทางการจาก Cfx.re ลงในโฟลเดอร์ที่เลือก (เลือกนอก Drive C: ได้) และบันทึกพาธให้อัตโนมัติ
+            ดาวน์โหลด FiveM.exe ทางการจาก Cfx.re ลงในโฟลเดอร์ที่เลือก (นอก Drive C: ได้) แล้วรันโปรแกรมติดตั้ง FiveM ลงเครื่องให้อัตโนมัติ
           </small>
         </div>
       </details>

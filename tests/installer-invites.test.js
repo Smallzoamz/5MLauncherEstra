@@ -72,36 +72,67 @@ test('installFiveMBootstrap validates targetDir, verifies PE header, and install
     /ไม่ถูกต้อง/
   );
 
-  // Valid > 1MB MZ binary succeeds and writes FiveM.exe atomically
+  // Valid > 1MB MZ binary succeeds, writes FiveM.exe atomically, and launches installer
   const fakePe = Buffer.alloc(1_100_000, 0);
   fakePe[0] = 0x4d;
   fakePe[1] = 0x5a;
+  const launches = [];
   const ok = await installFiveMBootstrap(
     { targetDir: customTarget },
     {
       queryRegistry: async () => '',
-      fetch: async () => new Response(fakePe, { status: 200 })
+      getProcessNames: async () => [],
+      fetch: async () => new Response(fakePe, { status: 200 }),
+      launchThroughExplorer: async (inst, args) => {
+        launches.push({ exe: inst.exe, args });
+      }
     }
   );
   assert.equal(ok.success, true);
   assert.equal(ok.alreadyInstalled, false);
+  assert.equal(ok.launched, true);
+  assert.equal(launches.length, 1);
+  assert.deepEqual(launches[0].args, []);
   const exeStat = await fs.stat(path.join(customTarget, 'FiveM.exe'));
   assert.equal(exeStat.size, 1_100_000);
 
-  // Second call detects alreadyInstalled without hitting fetch again
+  // Second call when FiveM.app is not yet present does not re-fetch, but still launches FiveM.exe to finish install
   let fetchCalled = false;
   const second = await installFiveMBootstrap(
     { targetDir: customTarget },
     {
       queryRegistry: async () => '',
+      getProcessNames: async () => [],
       fetch: async () => {
         fetchCalled = true;
         throw new Error('should not fetch');
+      },
+      launchThroughExplorer: async (inst, args) => {
+        launches.push({ exe: inst.exe, args });
       }
     }
   );
   assert.equal(second.alreadyInstalled, true);
+  assert.equal(second.launched, true);
+  assert.equal(launches.length, 2);
   assert.equal(fetchCalled, false);
+
+  // Third call once FiveM.app exists skips both download and installer launch
+  await fs.mkdir(path.join(customTarget, 'FiveM.app'));
+  const third = await installFiveMBootstrap(
+    { targetDir: customTarget },
+    {
+      queryRegistry: async () => '',
+      getProcessNames: async () => [],
+      fetch: async () => { throw new Error('should not fetch'); },
+      launchThroughExplorer: async (inst, args) => {
+        launches.push({ exe: inst.exe, args });
+      }
+    }
+  );
+  assert.equal(third.alreadyInstalled, true);
+  assert.equal(third.launched, false);
+  assert.equal(launches.length, 2);
 });
 
 test('socialStore and HTTP BFF handle game invites, response actions, validation, and rate limits', async t => {

@@ -924,6 +924,7 @@ pub struct GameEnvironmentReport {
 pub struct InstallFiveMResult {
     pub success: bool,
     pub already_installed: bool,
+    pub launched: bool,
     pub root: PathBuf,
     pub exe: PathBuf,
     pub gtav: DetectedGamePath,
@@ -1183,6 +1184,22 @@ pub fn detect_game_environment(current_fivem_path: &str) -> GameEnvironmentRepor
     }
 }
 
+fn launch_downloaded_fivem_installer(root: &PathBuf, exe: &PathBuf) -> Result<bool, String> {
+    if let Ok(names) = get_process_names() {
+        if names.iter().any(|name| is_fivem_process(name)) {
+            return Ok(false);
+        }
+    }
+    let installation = FiveMInstallation {
+        root: root.clone(),
+        exe: exe.clone(),
+        app: root.join("FiveM.app"),
+        data: root.join("FiveM.app").join("data"),
+    };
+    launch_through_explorer(&installation, &[])?;
+    Ok(true)
+}
+
 pub async fn install_fivem_bootstrap(target_dir: &str) -> Result<InstallFiveMResult, String> {
     let raw = target_dir.trim();
     if raw.is_empty() || raw.len() > 512 || raw.bytes().any(|b| b < 0x20) {
@@ -1205,22 +1222,57 @@ pub async fn install_fivem_bootstrap(target_dir: &str) -> Result<InstallFiveMRes
     let canonical = fs::canonicalize(&target).map_err(|e| format!("เข้าถึงโฟลเดอร์ไม่ได้: {e}"))?;
     let root = normalize_win_path(&canonical);
     let exe = root.join("FiveM.exe");
+    let app_installed = fs::metadata(root.join("FiveM.app"))
+        .map(|m| m.is_dir())
+        .unwrap_or(false);
 
     if fs::metadata(&exe).map(|m| m.is_file()).unwrap_or(false) {
         let gtav = detect_gtav(Some(&root));
-        return Ok(InstallFiveMResult {
-            success: true,
-            already_installed: true,
-            root,
-            exe,
-            gtav,
-            message: "พบ FiveM.exe ในโฟลเดอร์นี้แล้ว และเชื่อมต่อพาธเรียบร้อย".into(),
-        });
+        if app_installed {
+            return Ok(InstallFiveMResult {
+                success: true,
+                already_installed: true,
+                launched: false,
+                root,
+                exe,
+                gtav,
+                message: "พบ FiveM.exe และไฟล์ติดตั้ง (FiveM.app) ในโฟลเดอร์นี้แล้ว เชื่อมต่อพาธเรียบร้อย".into(),
+            });
+        }
+        return match launch_downloaded_fivem_installer(&root, &exe) {
+            Ok(true) => Ok(InstallFiveMResult {
+                success: true,
+                already_installed: true,
+                launched: true,
+                root,
+                exe,
+                gtav,
+                message: "พบ FiveM.exe และเปิดโปรแกรมติดตั้ง FiveM ลงเครื่องแล้ว กรุณารอสักครู่ให้ FiveM โหลดไฟล์ระบบจนเสร็จ".into(),
+            }),
+            Ok(false) => Ok(InstallFiveMResult {
+                success: true,
+                already_installed: true,
+                launched: false,
+                root,
+                exe,
+                gtav,
+                message: "พบ FiveM กำลังเปิดติดตั้งหรือทำงานอยู่แล้ว — เชื่อมต่อพาธเรียบร้อย".into(),
+            }),
+            Err(err) => Ok(InstallFiveMResult {
+                success: true,
+                already_installed: true,
+                launched: false,
+                root,
+                exe,
+                gtav,
+                message: format!("พบ FiveM.exe แล้ว แต่เปิดติดตั้งอัตโนมัติไม่สำเร็จ ({err}) กรุณาเปิด FiveM.exe ด้วยตนเอง"),
+            }),
+        };
     }
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(90))
-        .user_agent("EstraFiveMLauncher/2.1.5")
+        .user_agent("EstraFiveMLauncher/2.2.0")
         .build()
         .map_err(|e| format!("สร้างตัวดาวน์โหลดไม่สำเร็จ: {e}"))?;
     let resp = client
@@ -1252,14 +1304,35 @@ pub async fn install_fivem_bootstrap(target_dir: &str) -> Result<InstallFiveMRes
     })?;
 
     let gtav = detect_gtav(Some(&root));
-    Ok(InstallFiveMResult {
-        success: true,
-        already_installed: false,
-        root,
-        exe,
-        gtav,
-        message: "ดาวน์โหลดและติดตั้ง FiveM.exe สำเร็จแล้ว (สามารถเปิดเล่นได้ทันที — FiveM จะดาวน์โหลดแคชเพิ่มในครั้งแรก)".into(),
-    })
+    match launch_downloaded_fivem_installer(&root, &exe) {
+        Ok(true) => Ok(InstallFiveMResult {
+            success: true,
+            already_installed: false,
+            launched: true,
+            root,
+            exe,
+            gtav,
+            message: "ดาวน์โหลดและเปิด FiveM.exe เพื่อติดตั้งลงเครื่องแล้ว กรุณารอให้ตัวติดตั้งโหลดไฟล์ FiveM จนเสร็จ".into(),
+        }),
+        Ok(false) => Ok(InstallFiveMResult {
+            success: true,
+            already_installed: false,
+            launched: false,
+            root,
+            exe,
+            gtav,
+            message: "ดาวน์โหลด FiveM.exe สำเร็จแล้ว (พบ FiveM กำลังทำงานอยู่)".into(),
+        }),
+        Err(err) => Ok(InstallFiveMResult {
+            success: true,
+            already_installed: false,
+            launched: false,
+            root,
+            exe,
+            gtav,
+            message: format!("ดาวน์โหลด FiveM.exe สำเร็จแล้ว แต่เปิดติดตั้งอัตโนมัติไม่สำเร็จ ({err}) กรุณาเปิด FiveM.exe ด้วยตนเอง"),
+        }),
+    }
 }
 
 #[cfg(test)]

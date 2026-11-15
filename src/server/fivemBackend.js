@@ -329,6 +329,24 @@ export async function detectGameEnvironment(currentFivemPath = '', env = process
   return { success: true, gtav, fivem, suggestedInstallDir };
 }
 
+async function runDownloadedFiveMInstaller(root, exe, dependencies) {
+  const canLaunch = Boolean(dependencies.launchThroughExplorer || (dependencies.platform || process.platform) === 'win32');
+  if (!canLaunch) return { launched: false, alreadyRunning: false, error: '' };
+  try {
+    const names = await (dependencies.getProcessNames || getProcessNames)();
+    if (Array.isArray(names) && names.some(isFiveMProcess)) {
+      return { launched: false, alreadyRunning: true, error: '' };
+    }
+  } catch {}
+  try {
+    const installation = { root, exe, app: path.join(root, 'FiveM.app'), data: path.join(root, 'FiveM.app', 'data') };
+    await (dependencies.launchThroughExplorer || launchThroughExplorer)(installation, []);
+    return { launched: true, alreadyRunning: false, error: '' };
+  } catch (err) {
+    return { launched: false, alreadyRunning: false, error: err?.message || 'เปิดโปรแกรมไม่สำเร็จ' };
+  }
+}
+
 export async function installFiveMBootstrap(options = {}, dependencies = {}) {
   const env = dependencies.env || process.env;
   const raw = typeof options.targetDir === 'string' ? options.targetDir.trim() : '';
@@ -348,22 +366,42 @@ export async function installFiveMBootstrap(options = {}, dependencies = {}) {
   await fs.mkdir(expanded, { recursive: true });
   const root = await fs.realpath(expanded);
   const exe = path.join(root, 'FiveM.exe');
+  const appInstalled = Boolean((await fs.stat(path.join(root, 'FiveM.app')).catch(() => null))?.isDirectory());
   if ((await fs.stat(exe).catch(() => null))?.isFile()) {
     const envReport = await detectGameEnvironment(root, env, dependencies);
+    if (appInstalled) {
+      return {
+        success: true,
+        alreadyInstalled: true,
+        launched: false,
+        root,
+        exe,
+        gtav: envReport.gtav,
+        message: 'พบ FiveM.exe และไฟล์ติดตั้ง (FiveM.app) ในโฟลเดอร์นี้แล้ว เชื่อมต่อพาธเรียบร้อย'
+      };
+    }
+    const runResult = await runDownloadedFiveMInstaller(root, exe, dependencies);
     return {
       success: true,
       alreadyInstalled: true,
+      launched: runResult.launched,
       root,
       exe,
       gtav: envReport.gtav,
-      message: 'พบ FiveM.exe ในโฟลเดอร์นี้แล้ว และเชื่อมต่อพาธเรียบร้อย'
+      message: runResult.launched
+        ? 'พบ FiveM.exe และเปิดโปรแกรมติดตั้ง FiveM ลงเครื่องแล้ว กรุณารอสักครู่ให้ FiveM โหลดไฟล์ระบบจนเสร็จ'
+        : runResult.alreadyRunning
+          ? 'พบ FiveM กำลังเปิดติดตั้งหรือทำงานอยู่แล้ว — เชื่อมต่อพาธเรียบร้อย'
+          : runResult.error
+            ? `พบ FiveM.exe แล้ว แต่เปิดติดตั้งอัตโนมัติไม่สำเร็จ (${runResult.error}) กรุณาเปิด FiveM.exe ด้วยตนเอง`
+            : 'พบ FiveM.exe ในโฟลเดอร์นี้แล้ว และเชื่อมต่อพาธเรียบร้อย'
     };
   }
 
   const fetchImpl = dependencies.fetch || fetch;
   const resp = await fetchImpl('https://runtime.fivem.net/client/FiveM.exe', {
     signal: AbortSignal.timeout(90000),
-    headers: { 'User-Agent': 'EstraFiveMLauncher/2.1.5' }
+    headers: { 'User-Agent': 'EstraFiveMLauncher/2.2.0' }
   });
   if (!resp.ok) throw new Error(`ดาวน์โหลด FiveM.exe ไม่สำเร็จ (HTTP ${resp.status})`);
   const buf = Buffer.from(await resp.arrayBuffer());
@@ -375,13 +413,21 @@ export async function installFiveMBootstrap(options = {}, dependencies = {}) {
   await fs.rename(tmp, exe);
 
   const envReport = await detectGameEnvironment(root, env, dependencies);
+  const runResult = await runDownloadedFiveMInstaller(root, exe, dependencies);
   return {
     success: true,
     alreadyInstalled: false,
+    launched: runResult.launched,
     root,
     exe,
     gtav: envReport.gtav,
-    message: 'ดาวน์โหลดและติดตั้ง FiveM.exe สำเร็จแล้ว (สามารถเปิดเล่นได้ทันที — FiveM จะโหลดไฟล์เสริมในครั้งแรก)'
+    message: runResult.launched
+      ? 'ดาวน์โหลดและเปิด FiveM.exe เพื่อติดตั้งลงเครื่องแล้ว กรุณารอให้ตัวติดตั้งโหลดไฟล์ FiveM จนเสร็จ'
+      : runResult.alreadyRunning
+        ? 'ดาวน์โหลด FiveM.exe สำเร็จแล้ว (พบ FiveM กำลังทำงานอยู่)'
+        : runResult.error
+          ? `ดาวน์โหลด FiveM.exe สำเร็จแล้ว แต่เปิดติดตั้งอัตโนมัติไม่สำเร็จ (${runResult.error}) กรุณาเปิด FiveM.exe ด้วยตนเอง`
+          : 'ดาวน์โหลด FiveM.exe สำเร็จแล้ว'
   };
 }
 
