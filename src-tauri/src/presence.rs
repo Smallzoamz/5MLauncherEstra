@@ -17,7 +17,7 @@ use winreg::RegKey;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-pub const DISCORD_APPLICATION_ID: &str = "1545873345596096734";
+use crate::security::discord_application_id;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Debug, Clone, Serialize)]
@@ -333,7 +333,7 @@ async fn read_discord_pipe(pipe_path: &str, timeout: Duration) -> Result<Account
             let mut client = ClientOptions::new()
                 .open(pipe_path)
                 .map_err(|_| "connect failed".to_string())?;
-            let handshake = serde_json::json!({ "v": 1, "client_id": DISCORD_APPLICATION_ID }).to_string();
+            let handshake = serde_json::json!({ "v": 1, "client_id": discord_application_id() }).to_string();
             let mut frame = Vec::with_capacity(8 + handshake.len());
             frame.extend_from_slice(&0u32.to_le_bytes());
             frame.extend_from_slice(&(handshake.len() as u32).to_le_bytes());

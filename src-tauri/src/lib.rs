@@ -6,6 +6,7 @@ pub mod patcher;
 pub mod player_name;
 pub mod presence;
 pub mod screenshots;
+pub mod security;
 pub mod session;
 pub mod social;
 pub mod startup;
@@ -107,9 +108,11 @@ async fn detect_game_environment_cmd(path: String) -> Result<GameEnvironmentRepo
 
 #[tauri::command]
 async fn install_fivem_bootstrap_cmd(
+    webview: tauri::Webview,
     state: State<'_, AppState>,
     target_dir: String,
 ) -> Result<InstallFiveMResult, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
     let _guard = state
         .mutation_lock
         .try_lock()
@@ -119,10 +122,12 @@ async fn install_fivem_bootstrap_cmd(
 
 #[tauri::command]
 async fn launch_fivem_cmd(
+    webview: tauri::Webview,
     app: AppHandle,
     state: State<'_, AppState>,
     request: LaunchRequest,
 ) -> Result<LaunchResult, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
     let _guard = state
         .mutation_lock
         .try_lock()
@@ -132,9 +137,11 @@ async fn launch_fivem_cmd(
 
 #[tauri::command]
 async fn clean_cache_cmd(
+    webview: tauri::Webview,
     state: State<'_, AppState>,
     fivem_path: String,
 ) -> Result<CleanCacheResult, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
     let _guard = state
         .mutation_lock
         .try_lock()
@@ -153,9 +160,11 @@ async fn preview_maintenance_cmd(fivem_path: String) -> Result<MaintenancePrevie
 
 #[tauri::command]
 async fn clean_maintenance_cmd(
+    webview: tauri::Webview,
     state: State<'_, AppState>,
     request: CleanMaintenanceRequest,
 ) -> Result<MaintenanceCleanResult, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
     let _guard = state
         .mutation_lock
         .try_lock()
@@ -167,18 +176,22 @@ async fn clean_maintenance_cmd(
 
 #[tauri::command]
 async fn check_launcher_update_cmd(
+    webview: tauri::Webview,
     app: AppHandle,
     github_repo: Option<String>,
 ) -> Result<LauncherUpdateCheck, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
     check_launcher_update(&app, github_repo.as_deref()).await
 }
 
 #[tauri::command]
 async fn install_launcher_update_cmd(
+    webview: tauri::Webview,
     app: AppHandle,
     state: State<'_, AppState>,
     github_repo: Option<String>,
 ) -> Result<String, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
     let guard = state
         .mutation_lock
         .try_lock()
@@ -190,21 +203,25 @@ async fn install_launcher_update_cmd(
 
 #[tauri::command]
 async fn check_city_patch_cmd(
+    webview: tauri::Webview,
     manifest_url: String,
     fivem_path: String,
     server_id: String,
 ) -> Result<PatchCheckResult, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
     check_city_patch(&manifest_url, &fivem_path, &server_id).await
 }
 
 #[tauri::command]
 async fn apply_city_patch_cmd(
+    webview: tauri::Webview,
     app: AppHandle,
     state: State<'_, AppState>,
     manifest_url: String,
     fivem_path: String,
     server_id: String,
 ) -> Result<PatchApplyResult, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
     let _guard = state
         .mutation_lock
         .try_lock()
@@ -285,7 +302,8 @@ fn window_close_cmd(app: AppHandle) {
 }
 
 #[tauri::command]
-fn open_external_url_cmd(url: String) -> Result<(), String> {
+fn open_external_url_cmd(webview: tauri::Webview, url: String) -> Result<(), String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
     let trimmed = url.trim();
     if trimmed.is_empty() || trimmed.len() > 500 || trimmed.chars().any(|c| c.is_control() || c.is_whitespace()) {
         return Err("ลิงก์ไม่ถูกต้อง".to_string());
@@ -311,12 +329,14 @@ fn open_external_url_cmd(url: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn social_request_cmd(
+    webview: tauri::Webview,
     state: State<'_, AppState>,
     method: String,
     path: String,
     body: Option<serde_json::Value>,
     social_server_url: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
     social_request(&state.social, method, path, body, social_server_url).await
 }
 
@@ -326,7 +346,11 @@ fn get_startup_settings_cmd() -> StartupSettingsState {
 }
 
 #[tauri::command]
-fn set_startup_settings_cmd(enabled: bool) -> Result<StartupSettingsState, String> {
+fn set_startup_settings_cmd(
+    webview: tauri::Webview,
+    enabled: bool,
+) -> Result<StartupSettingsState, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
     set_startup_settings(enabled)
 }
 
@@ -340,9 +364,11 @@ fn set_screenshot_config_cmd(
 
 #[tauri::command]
 async fn capture_screenshot_cmd(
+    webview: tauri::Webview,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<CaptureScreenshotResult, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
     let manager = state.screenshots.clone();
     let overlay = state.overlay.clone();
     tokio::task::spawn_blocking(move || capture_screenshot_now(&app, &manager, Some(&overlay)))
@@ -532,7 +558,21 @@ pub fn run() {
             }
             tray_builder.build(app)?;
 
+            #[cfg(not(debug_assertions))]
+            {
+                let prod_name = app.config().product_name.as_deref().unwrap_or("");
+                let ident = app.config().identifier.as_str();
+                if !security::verify_brand_integrity(prod_name, ident)
+                    || !security::verify_embedded_dist_assets(&app.handle())
+                {
+                    security::mark_tampered();
+                    std::process::exit(0);
+                }
+            }
+            security::start_integrity_watchdog();
+
             if let Some(win) = app.get_webview_window("main") {
+                security::lock_webview_window(&win);
                 let win_clone = win.clone();
                 win.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -545,6 +585,9 @@ pub fn run() {
                 restore_main_window(&app.handle());
             }
             let _ = ensure_overlay_window(&app.handle());
+            if let Some(overlay_win) = app.get_webview_window("overlay") {
+                security::lock_webview_window(&overlay_win);
+            }
             let app_state = app.state::<AppState>();
             start_hotkey_listener(
                 app.handle().clone(),

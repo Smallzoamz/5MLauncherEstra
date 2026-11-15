@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    estra_fivem_launcher_lib::security::harden_process_startup();
     estra_fivem_launcher_lib::run()
 }

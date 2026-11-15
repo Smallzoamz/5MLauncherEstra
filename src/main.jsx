@@ -1,5 +1,7 @@
 import { initDesktopBridge } from './services/desktopBridge';
+import { initClientGuard } from './services/clientGuard';
 initDesktopBridge();
+const guardState = initClientGuard();
 const isOverlayWindow =
   typeof window !== 'undefined' &&
   new URLSearchParams(window.location.search).get('window') === 'overlay';
@@ -10,8 +12,10 @@ import App from './App';
 import OverlayApp from './components/OverlayApp';
 import './index.css';
 
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    {isOverlayWindow ? <OverlayApp desktopWindow /> : <App />}
-  </React.StrictMode>
-);
+if (!guardState.blocked) {
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    <React.StrictMode>
+      {isOverlayWindow ? <OverlayApp desktopWindow /> : <App />}
+    </React.StrictMode>
+  );
+}

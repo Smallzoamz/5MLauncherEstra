@@ -1,6 +1,6 @@
 [package]
 name = "estra-fivem-launcher"
-version = "2.2.2"
+version = "2.2.3"
 description = "Estra FiveM Launcher for Windows"
 authors = ["Estra FiveM Launcher contributors"]
 edition = "2021"
@@ -11,6 +11,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
@@ -30,6 +33,9 @@ rusty-leveldb = "4"
 winreg = "0.52"
 uuid = { version = "1", features = ["v4"] }
 png = "0.18"
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
 
 [profile.release]
 panic = "abort"

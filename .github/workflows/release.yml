@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   publish-tauri:
@@ -42,6 +44,81 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: 'Estra FiveM Launcher v__VERSION__'
-          releaseBody: 'ดูรายละเอียดการอัปเดตใน Release Notes ด้านล่าง'
+          releaseBody: 'ดูรายละเอียดการอัปเดตและการตรวจสอบความปลอดภัย SHA-256 ใน Release Notes ด้านล่าง'
           releaseDraft: false
           prerelease: false
+
+      - name: Generate SHA256SUMS and update Release Notes
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          $ver = $pkg.version
+          $tag = "v$ver"
+          $bundleDir = "src-tauri/target/release/bundle/nsis"
+          $files = @()
+          if (Test-Path $bundleDir) {
+            $files += Get-ChildItem $bundleDir -File | Where-Object { $_.Extension -in '.exe', '.zip', '.sig' }
+          }
+          if (-not $files.Count) {
+            Write-Warning "No NSIS artifacts found in $bundleDir"
+            exit 0
+          }
+
+          $sumLines = @()
+          $tableRows = @()
+          $setupExe = $null
+          $setupSha = ""
+
+          foreach ($f in $files) {
+            $hash = (Get-FileHash -Path $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            $sizeMb = [math]::Round($f.Length / 1MB, 2)
+            $sumLines += "$hash  $($f.Name)"
+            $tableRows += "| ``$($f.Name)`` | $sizeMb MB | ``$hash`` |"
+            if ($f.Name -like "*-setup.exe") {
+              $setupExe = $f.Name
+              $setupSha = $hash
+            }
+          }
+
+          Set-Content -Path "SHA256SUMS.txt" -Value ($sumLines -join "`n") -Encoding ascii
+          gh release upload $tag SHA256SUMS.txt --clobber
+
+          $vtLine = if ($setupSha) {
+            "- 🔍 **ตรวจผล VirusTotal (จาก SHA-256):** https://www.virustotal.com/gui/file/$setupSha"
+          } else {
+            ""
+          }
+          $verifyCmd = if ($setupExe) {
+            "Get-FileHash `".\$setupExe`" -Algorithm SHA256"
+          } else {
+            "Get-FileHash `".\<installer>.exe`" -Algorithm SHA256"
+          }
+
+          $notes = @(
+            "### การตรวจสอบความปลอดภัยและความถูกต้องของไฟล์ (Verification & SmartScreen)",
+            "",
+            "- ✅ ไฟล์ติดตั้งถูกคอมไพล์โดยตรงจากซอร์สโค้ดใน GitHub Actions (ไม่ได้ผ่านการแพ็กด้วย packer และไม่ขอสิทธิ์ Administrator / UAC)",
+            "- 🛡️ หาก Windows SmartScreen แสดงหน้าต่าง *Windows protected your PC* (เนื่องจากเป็นแอปใหม่ที่ยังไม่มี Commercial Code Signing Cert) ให้กด **`More info` -> `Run anyway`**",
+            $vtLine,
+            "",
+            "#### ค่า SHA-256 Checksum ประจำเวอร์ชัน $tag",
+            "| ไฟล์ | ขนาด | SHA-256 |",
+            "| --- | ---: | --- |",
+            ($tableRows -join "`n"),
+            "",
+            "ตรวจสอบจาก PowerShell บนเครื่องของคุณ:",
+            "``````powershell",
+            $verifyCmd,
+            "``````"
+          ) | Where-Object { $_ -ne $null }
+
+          Set-Content -Path "release_notes.md" -Value ($notes -join "`n") -Encoding utf8
+          gh release edit $tag --notes-file release_notes.md
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        continue-on-error: true
+        with:
+          subject-path: 'src-tauri/target/release/bundle/nsis/*-setup.exe'

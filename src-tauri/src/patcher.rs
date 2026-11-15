@@ -16,7 +16,7 @@ use tauri_plugin_updater::UpdaterExt;
 use url::Url;
 use uuid::Uuid;
 
-pub const DEFAULT_GITHUB_REPO: &str = "Smallzoamz/5MLauncherEstra";
+use crate::security::default_github_repo;
 
 pub fn validate_github_repo(repo: &str) -> Result<String, String> {
     let trimmed = repo.trim();
@@ -197,7 +197,7 @@ pub async fn check_launcher_update(
     let repo_raw = github_repo
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        .unwrap_or(DEFAULT_GITHUB_REPO);
+        .unwrap_or_else(|| default_github_repo());
     let repo = validate_github_repo(repo_raw)?;
 
     if repo.starts_with("OWNER/") {
@@ -255,7 +255,7 @@ pub async fn install_launcher_update(
     let repo_raw = github_repo
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        .unwrap_or(DEFAULT_GITHUB_REPO);
+        .unwrap_or_else(|| default_github_repo());
     let repo = validate_github_repo(repo_raw)?;
     if repo.starts_with("OWNER/") {
         return Err("ยังไม่ได้ตั้งค่า GitHub Repository (owner/repo) สำหรับอัปเดตตัว Launcher".into());

@@ -1,7 +1,7 @@
 {
   "name": "estra-fivem-launcher",
   "private": true,
-  "version": "2.2.2",
+  "version": "2.2.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -36,6 +36,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "44.2.0",
     "electron-builder": "26.15.3",
+    "javascript-obfuscator": "^5.10.1",
     "vite": "^6.2.0"
   },
   "engines": {

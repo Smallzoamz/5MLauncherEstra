@@ -10,12 +10,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use url::Url;
 use uuid::Uuid;
 
+use crate::security::{supabase_origin, supabase_publishable_key};
 const AVATAR_PALETTE: [&str; 7] = [
     "#2b6bf3", "#0ea5e9", "#6366f1", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899",
 ];
 const ONLINE_WINDOW_MS: u64 = 45_000;
-const SUPABASE_ORIGIN: &str = "https://hcynletyqztbbouwlcsg.supabase.co";
-const SUPABASE_PUBLISHABLE_KEY: &str = "sb_publishable_puj9yz5BQ_i3DEmhnpgmww_4fifPu5e";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct StoredUser {
@@ -1021,7 +1020,7 @@ pub async fn social_request(
             return Err("Social Server URL ต้องเป็น HTTP หรือ HTTPS ที่ปลอดภัย".to_string());
         }
         let origin = parsed.origin().ascii_serialization();
-        let is_supabase = origin == SUPABASE_ORIGIN && parsed.path().starts_with("/functions/v1/");
+        let is_supabase = origin == supabase_origin() && parsed.path().starts_with("/functions/v1/");
         let base = format!("{origin}{}", parsed.path().trim_end_matches('/'));
 
         let is_realtime_token_req = path == "/api/social/realtime-token";
@@ -1058,7 +1057,7 @@ pub async fn social_request(
             req = req.bearer_auth(tok);
         }
         if is_supabase {
-            req = req.header("apikey", SUPABASE_PUBLISHABLE_KEY);
+            req = req.header("apikey", supabase_publishable_key());
             if let Some(rtok) = sess.refresh_token.as_deref() {
                 req = req.header("X-Refresh-Token", rtok);
             }

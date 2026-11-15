@@ -940,6 +940,7 @@ pub fn start_hotkey_listener(app: AppHandle, manager: ScreenshotManager, overlay
         let _ = std::thread::Builder::new()
             .name("estra-screenshot-hotkey".into())
             .spawn(move || {
+                crate::security::hide_sensitive_thread();
                 let mut was_down = false;
                 let mut last_capture = Instant::now() - Duration::from_secs(5);
                 let mut last_hotkey = String::new();
