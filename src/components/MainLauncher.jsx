@@ -126,7 +126,7 @@ export default function MainLauncher({
               patchManifestUrl: server.patchManifestUrl || matched.patchManifestUrl || '',
               customBannerUrl: server.customBannerUrl || matched.customBannerUrl || ''
             }
-          : { directorySlug: '' }),
+          : { directorySlug: '', lastFetchedName: '' }),
         status: 'Unknown',
         onlinePlayers: null,
         maxPlayers: null,

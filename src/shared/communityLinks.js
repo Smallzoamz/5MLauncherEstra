@@ -48,10 +48,10 @@ export function sanitizeExternalUrl(raw) {
   }
 }
 
-export function resolveCommunityLinks(settings = {}) {
+export function resolveCommunityLinks() {
   return {
-    websiteUrl: sanitizeExternalUrl(settings.websiteUrl || DEFAULT_COMMUNITY_LINKS.websiteUrl),
-    discordUrl: sanitizeExternalUrl(settings.discordUrl || DEFAULT_COMMUNITY_LINKS.discordUrl),
-    facebookUrl: sanitizeExternalUrl(settings.facebookUrl || DEFAULT_COMMUNITY_LINKS.facebookUrl)
+    websiteUrl: sanitizeExternalUrl(DEFAULT_COMMUNITY_LINKS.websiteUrl),
+    discordUrl: sanitizeExternalUrl(DEFAULT_COMMUNITY_LINKS.discordUrl),
+    facebookUrl: sanitizeExternalUrl(DEFAULT_COMMUNITY_LINKS.facebookUrl)
   };
 }

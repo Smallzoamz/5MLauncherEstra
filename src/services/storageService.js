@@ -20,7 +20,7 @@ export const DEFAULT_SETTINGS = {
   facebookUrl: 'https://www.facebook.com/estralauncher'
 };
 export const DEFAULT_SERVERS = [];
-function resetLive(s) { return { ...s, favorite: !!s.favorite, directorySlug: typeof s.directorySlug === 'string' ? s.directorySlug : '', customBannerUrl: bannerImageUrl(s.customBannerUrl), bannerUrl: bannerImageUrl(s.bannerUrl), connectingBannerUrl: bannerImageUrl(s.connectingBannerUrl), patchManifestUrl: normalizePatchManifestUrl(s.patchManifestUrl) || '', logoUrl: s.iconSource === 'server-icon-v1' && typeof s.logoUrl === 'string' && s.logoUrl.startsWith('data:image/png;base64,') ? s.logoUrl : null, iconSource: s.iconSource === 'server-icon-v1' ? s.iconSource : null, status: 'Unknown', onlinePlayers: null, maxPlayers: null, ping: null, gameBuild: null, lockPure: null, queryError: null }; }
+function resetLive(s) { return { ...s, favorite: !!s.favorite, directorySlug: typeof s.directorySlug === 'string' ? s.directorySlug : '', lastFetchedName: typeof s.lastFetchedName === 'string' ? s.lastFetchedName : '', customBannerUrl: bannerImageUrl(s.customBannerUrl), bannerUrl: bannerImageUrl(s.bannerUrl), connectingBannerUrl: bannerImageUrl(s.connectingBannerUrl), patchManifestUrl: normalizePatchManifestUrl(s.patchManifestUrl) || '', logoUrl: s.iconSource === 'server-icon-v1' && typeof s.logoUrl === 'string' && s.logoUrl.startsWith('data:image/png;base64,') ? s.logoUrl : null, iconSource: s.iconSource === 'server-icon-v1' ? s.iconSource : null, status: 'Unknown', onlinePlayers: null, maxPlayers: null, ping: null, gameBuild: null, lockPure: null, queryError: null }; }
 function isUntouchedFactoryDefaultServer(list) {
   if (!Array.isArray(list) || list.length !== 1) return false;
   const item = list[0];
@@ -55,7 +55,7 @@ export function getSavedServers() {
     return list.filter(s => s && typeof s.id === 'string' && typeof s.name === 'string' && typeof s.ip === 'string' && !ids.has(s.id) && ids.add(s.id)).map(resetLive);
   } catch { return DEFAULT_SERVERS.map(resetLive); }
 }
-export function saveServers(servers) { localStorage.setItem(STORAGE_KEY_SERVERS, JSON.stringify(servers.map(({ id, name, ip, tag, inGameName, logoUrl, iconSource, bannerUrl, connectingBannerUrl, customBannerUrl, cl2, favorite, patchManifestUrl, directorySlug }) => ({ id, name, ip, tag, inGameName, logoUrl, iconSource, bannerUrl, connectingBannerUrl, customBannerUrl, cl2, favorite: !!favorite, patchManifestUrl: patchManifestUrl || '', directorySlug: directorySlug || '' })))); }
+export function saveServers(servers) { localStorage.setItem(STORAGE_KEY_SERVERS, JSON.stringify(servers.map(({ id, name, ip, tag, inGameName, logoUrl, iconSource, bannerUrl, connectingBannerUrl, customBannerUrl, cl2, favorite, patchManifestUrl, directorySlug, lastFetchedName }) => ({ id, name, ip, tag, inGameName, logoUrl, iconSource, bannerUrl, connectingBannerUrl, customBannerUrl, cl2, favorite: !!favorite, patchManifestUrl: patchManifestUrl || '', directorySlug: directorySlug || '', lastFetchedName: typeof lastFetchedName === 'string' ? lastFetchedName : '' })))); }
 export function getActiveServerId() { try { return localStorage.getItem(STORAGE_KEY_ACTIVE_ID) || ''; } catch { return ''; } }
 export function saveActiveServerId(id) { localStorage.setItem(STORAGE_KEY_ACTIVE_ID, id); }
 export function hasSeenOnboardingGuide() { try { return localStorage.getItem(STORAGE_KEY_ONBOARDING_GUIDE_SEEN) === '1'; } catch { return true; } }
@@ -71,8 +71,18 @@ export function getSettings() {
     if (typeof result.socialServerUrl === 'string' && !result.socialServerUrl.trim()) {
       result.socialServerUrl = SUPABASE_SOCIAL_GATEWAY_URL;
     }
+    result.websiteUrl = DEFAULT_SETTINGS.websiteUrl;
+    result.discordUrl = DEFAULT_SETTINGS.discordUrl;
+    result.facebookUrl = DEFAULT_SETTINGS.facebookUrl;
     return result;
   } catch { return { ...DEFAULT_SETTINGS }; }
 }
-export function saveSettings(settings) { localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings)); }
+export function saveSettings(settings) {
+  localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify({
+    ...settings,
+    websiteUrl: DEFAULT_SETTINGS.websiteUrl,
+    discordUrl: DEFAULT_SETTINGS.discordUrl,
+    facebookUrl: DEFAULT_SETTINGS.facebookUrl
+  }));
+}
 

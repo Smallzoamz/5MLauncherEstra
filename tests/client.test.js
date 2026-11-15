@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getSavedServers, saveServers, getSettings, getActiveServerId, hasSeenOnboardingGuide, markOnboardingGuideSeen } from '../src/services/storageService.js';
-import { lookupDirectoryServer, applyDirectoryMetadataToServer, mergeDirectoryEntries } from '../src/shared/serverDirectory.js';
+import { lookupDirectoryServer, applyDirectoryMetadataToServer, mergeDirectoryEntries, cleanFiveMServerName, pickFetchedServerName, syncLiveServerName } from '../src/shared/serverDirectory.js';
 import { queryServerInfo, launchFiveM } from '../src/services/fivemService.js';
 import audioService from '../src/services/audioService.js';
 
@@ -17,11 +17,13 @@ test('storage recovers malformed data, starts empty, migrates untouched legacy d
   values.delete('estra_empty_default_migrated_v1');
   values.set('fivem_launcher_servers_v3', JSON.stringify([{ id: 'noxtis-legacy', name: 'Noxtis Legacy', ip: '89.38.101.136:30120', inGameName: 'Custom RP Name' }]));
   assert.equal(getSavedServers().length, 1);
-  saveServers([{ id:'test', ip:'example.com', name:'Test', status:'Online', onlinePlayers:45 }]);
-  const s = getSavedServers()[0]; assert.equal(s.status, 'Unknown'); assert.equal(s.onlinePlayers, null);
-  values.set('fivem_launcher_settings_v3', '{"checkMicBeforeLaunch":"yes","runOnWindowsStartup":true}');
+  saveServers([{ id:'test', ip:'example.com', name:'Test', lastFetchedName:'Test', status:'Online', onlinePlayers:45 }]);
+  const s = getSavedServers()[0]; assert.equal(s.status, 'Unknown'); assert.equal(s.onlinePlayers, null); assert.equal(s.lastFetchedName, 'Test');
+  values.set('fivem_launcher_settings_v3', '{"checkMicBeforeLaunch":"yes","runOnWindowsStartup":true,"discordUrl":"https://discord.gg/e75HXk59EE","facebookUrl":"https://www.facebook.com/ohm.noxoradev"}');
   assert.equal(getSettings().checkMicBeforeLaunch, true);
   assert.equal(getSettings().runOnWindowsStartup, true);
+  assert.equal(getSettings().discordUrl, 'https://discord.gg/WYjfK6FWgB');
+  assert.equal(getSettings().facebookUrl, 'https://www.facebook.com/estralauncher');
   assert.equal(hasSeenOnboardingGuide(), false);
   markOnboardingGuideSeen();
   assert.equal(hasSeenOnboardingGuide(), true);
@@ -50,6 +52,50 @@ test('server directory resolves connect commands, aliases, and syncs canonical m
   assert.equal(synced.server.name, 'Estra Roleplay');
   assert.equal(synced.server.tag, 'Roleplay');
   assert.equal(synced.server.patchManifestUrl, 'https://cdn.example.com/manifest.json');
+});
+test('cleanFiveMServerName and pickFetchedServerName sanitize color tags and prefer sv_projectName', () => {
+  assert.equal(cleanFiveMServerName('^1[TH]^7 ^4Estra   Roleplay^0 ~r~18+~s~'), '[TH] Estra Roleplay 18+');
+  assert.equal(
+    pickFetchedServerName(
+      { projectName: '^4Estra City^0', hostname: '^1[TH]^7 Long Promo Name ^2discord.gg/x' },
+      '103.10.20.30:30120'
+    ),
+    'Estra City'
+  );
+  assert.equal(
+    pickFetchedServerName(
+      { projectName: '', hostname: '^2Bangkok Town^7' },
+      '103.10.20.30:30120'
+    ),
+    'Bangkok Town'
+  );
+  assert.equal(
+    pickFetchedServerName(
+      { projectName: null, hostname: '103.10.20.30:30120' },
+      '103.10.20.30:30120'
+    ),
+    ''
+  );
+  // Server offline keeps saved name unchanged
+  assert.deepEqual(
+    syncLiveServerName({ id: '2', ip: '103.10.20.30:30120', name: 'City V1', lastFetchedName: 'City V1' }, { online: false }, []),
+    { name: 'City V1', lastFetchedName: 'City V1' }
+  );
+  // Same live name preserves manual nickname edit
+  assert.deepEqual(
+    syncLiveServerName({ id: '2', ip: '103.10.20.30:30120', name: 'My Nickname', lastFetchedName: 'City V1' }, { online: true, projectName: '^2City V1^0' }, []),
+    { name: 'My Nickname', lastFetchedName: 'City V1' }
+  );
+  // Live server changes name -> updates saved name automatically
+  assert.deepEqual(
+    syncLiveServerName({ id: '2', ip: '103.10.20.30:30120', name: 'My Nickname', lastFetchedName: 'City V1' }, { online: true, projectName: '^4City V2' }, []),
+    { name: 'City V2', lastFetchedName: 'City V2' }
+  );
+  // Directory server keeps canonical directory name
+  assert.deepEqual(
+    syncLiveServerName({ id: '3', ip: '89.38.101.136:30120', name: 'Noxtis Legacy', lastFetchedName: '' }, { online: true, projectName: 'Other Name' }),
+    { name: 'Noxtis Legacy', lastFetchedName: '' }
+  );
 });
 test('client query network failure never falls back to online', async () => {
   const original = globalThis.fetch;

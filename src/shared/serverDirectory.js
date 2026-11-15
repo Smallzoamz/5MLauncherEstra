@@ -124,3 +124,47 @@ export function applyDirectoryMetadataToServer(server, directory) {
     }
   };
 }
+
+export function cleanFiveMServerName(raw) {
+  if (typeof raw !== 'string') return '';
+  return raw
+    .replace(/\^[0-9*_=~]/g, '')
+    .replace(/~n~/gi, ' ')
+    .replace(/~[a-zA-Z]{1,6}~/g, '')
+    .replace(/[\x00-\x1f\x7f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 100);
+}
+
+export function pickFetchedServerName(info, fallbackAddress = '') {
+  if (!info || typeof info !== 'object') return '';
+  const fallback = String(fallbackAddress || '').trim().toLowerCase();
+  const candidates = [info.projectName, info.hostname];
+  for (const raw of candidates) {
+    const cleaned = cleanFiveMServerName(raw);
+    if (!cleaned) continue;
+    if (fallback && cleaned.toLowerCase() === fallback) continue;
+    return cleaned;
+  }
+  return '';
+}
+
+export function syncLiveServerName(server, liveInfo, directory = DEFAULT_SERVER_DIRECTORY) {
+  const currentName = typeof server?.name === 'string' ? server.name : '';
+  const prevFetched = typeof server?.lastFetchedName === 'string' ? server.lastFetchedName.trim() : '';
+  if (!server || !liveInfo?.online) {
+    return { name: currentName, lastFetchedName: prevFetched };
+  }
+  if (lookupDirectoryServer(server.ip, directory)) {
+    return { name: currentName, lastFetchedName: prevFetched };
+  }
+  const liveName = pickFetchedServerName(liveInfo, server.ip);
+  if (!liveName) {
+    return { name: currentName, lastFetchedName: prevFetched };
+  }
+  if (!prevFetched || liveName !== prevFetched) {
+    return { name: liveName, lastFetchedName: liveName };
+  }
+  return { name: currentName, lastFetchedName: prevFetched };
+}

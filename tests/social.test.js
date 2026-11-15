@@ -339,6 +339,13 @@ test('sanitizeExternalUrl validates official community links safely', () => {
   assert.equal(defaults.websiteUrl, 'https://estralauncher.vercel.app/');
   assert.equal(defaults.discordUrl, 'https://discord.gg/WYjfK6FWgB');
   assert.equal(defaults.facebookUrl, 'https://www.facebook.com/estralauncher');
+
+  const withLegacyOverrides = resolveCommunityLinks({
+    websiteUrl: 'https://old.example.com',
+    discordUrl: 'https://discord.gg/e75HXk59EE',
+    facebookUrl: 'https://www.facebook.com/ohm.noxoradev'
+  });
+  assert.deepEqual(withLegacyOverrides, defaults);
 });
 
 test('socialStore and /api/social/change-password enforce first-login password change workflow', async t => {

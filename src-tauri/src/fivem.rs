@@ -321,6 +321,8 @@ pub struct LiveServerInfo {
     pub max_clients: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hostname: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
     pub game_build: Option<String>,
     pub lock_pure: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -499,6 +501,11 @@ pub async fn query_live_server(input: &str, include_media: bool) -> Result<LiveS
         };
 
         let logo = server_icon_data_url(info.get("icon").and_then(|v| v.as_str()));
+        let project_name = vars
+            .get("sv_projectName")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().chars().take(200).collect::<String>())
+            .filter(|s| !s.is_empty());
         let hostname = dynamic
             .get("hostname")
             .and_then(|v| v.as_str())
@@ -515,6 +522,7 @@ pub async fn query_live_server(input: &str, include_media: bool) -> Result<LiveS
             clients: parse_count(dynamic.get("clients")),
             max_clients: parse_count(dynamic.get("sv_maxclients")),
             hostname: Some(hostname),
+            project_name,
             game_build,
             lock_pure,
             requirements_source: requirements_info.map(|_| "Direct HTTP".to_string()),
@@ -545,6 +553,7 @@ pub async fn query_live_server(input: &str, include_media: bool) -> Result<LiveS
                 clients: None,
                 max_clients: None,
                 hostname: None,
+                project_name: None,
                 game_build: None,
                 lock_pure: None,
                 requirements_source: None,

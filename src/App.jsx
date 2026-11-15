@@ -19,7 +19,7 @@ import { UserAvatar } from './components/UserAvatar';
 import useDialogFocus from './components/useDialogFocus';
 import { getSavedServers, saveServers, getActiveServerId, saveActiveServerId, getSettings, saveSettings, hasSeenOnboardingGuide, markOnboardingGuideSeen } from './services/storageService';
 import { fetchServerDirectory, loadCachedServerDirectory } from './services/serverDirectoryService';
-import { applyDirectoryMetadataToServer, lookupDirectoryServer, normalizeDirectoryAddress } from './shared/serverDirectory';
+import { applyDirectoryMetadataToServer, lookupDirectoryServer, normalizeDirectoryAddress, syncLiveServerName } from './shared/serverDirectory';
 import { resolveCommunityLinks } from './shared/communityLinks';
 import { queryServerInfo } from './services/fivemService';
 import CityBackground from './components/CityBackground';
@@ -132,6 +132,8 @@ export default function App() {
   const friendOverlayMapRef = useRef(null);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  const directoryRef = useRef(directory);
+  directoryRef.current = directory;
   const [guideFirstVisit, setGuideFirstVisit] = useState(() => !hasSeenOnboardingGuide());
   const mustChangePromptedRef = useRef(false);
   const guideAutoOpenedRef = useRef(false);
@@ -683,16 +685,23 @@ export default function App() {
       setRefreshing(true);
       const result = await queryServerInfo(activeRef.current, controller.signal);
       if (controller.signal.aborted) return;
-      setServers(prev => prev.map(s => s.id === active.id && s.ip === active.ip ? {
-        ...s, onlinePlayers: result.clients, maxPlayers: result.maxClients,
-        status: result.status, ping: result.ping, gameBuild: result.gameBuild,
-        lockPure: result.lockPure,
-        logoUrl: result.online ? (result.logoUrl || null) : s.logoUrl,
-        iconSource: result.online ? (result.iconSource || null) : s.iconSource,
-        bannerUrl: result.online ? (result.bannerUrl || null) : s.bannerUrl,
-        connectingBannerUrl: result.online ? (result.connectingBannerUrl || null) : s.connectingBannerUrl,
-        checkedAt: result.checkedAt, queryError: result.error || null
-      } : s));
+      setServers(prev => prev.map(s => {
+        if (s.id !== active.id || s.ip !== active.ip) return s;
+        const syncedName = syncLiveServerName(s, result, directoryRef.current);
+        return {
+          ...s,
+          name: syncedName.name,
+          lastFetchedName: syncedName.lastFetchedName,
+          onlinePlayers: result.clients, maxPlayers: result.maxClients,
+          status: result.status, ping: result.ping, gameBuild: result.gameBuild,
+          lockPure: result.lockPure,
+          logoUrl: result.online ? (result.logoUrl || null) : s.logoUrl,
+          iconSource: result.online ? (result.iconSource || null) : s.iconSource,
+          bannerUrl: result.online ? (result.bannerUrl || null) : s.bannerUrl,
+          connectingBannerUrl: result.online ? (result.connectingBannerUrl || null) : s.connectingBannerUrl,
+          checkedAt: result.checkedAt, queryError: result.error || null
+        };
+      }));
       setRefreshing(false);
       timer = setTimeout(query, 30000);
     };

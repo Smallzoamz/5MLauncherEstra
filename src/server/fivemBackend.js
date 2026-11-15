@@ -70,11 +70,13 @@ export async function queryLiveServer(input, request = fetchJson, { includeMedia
       info ||= {};
     }
     const vars = info.vars || {};
+    const rawProjectName = typeof vars.sv_projectName === 'string' ? vars.sv_projectName.trim() : '';
     // A responding endpoint with missing values must clear stale listing data.
     const requirements = (requirementsInfo || info).vars || {};
     const banners = includeMedia ? await serverBanners(vars) : {};
     return { online: true, status: 'Online', ip: target.address, clients: count(dynamic.clients), maxClients: count(dynamic.sv_maxclients),
       hostname: String(dynamic.hostname || vars.sv_projectName || target.address).slice(0, 200),
+      projectName: rawProjectName ? rawProjectName.slice(0, 200) : null,
       gameBuild: /^[1-9]\d{3,4}$/.test(String(requirements.sv_enforceGameBuild)) ? String(requirements.sv_enforceGameBuild) : null,
       lockPure: /^[012]$/.test(String(requirements.sv_pureLevel)) ? Number(requirements.sv_pureLevel) : null,
       requirementsSource: requirementsInfo ? 'Direct HTTP' : null,

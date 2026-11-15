@@ -30,9 +30,11 @@ test('query failure never claims online', async () => {
 test('join code query goes to Cfx endpoint', async () => {
   const result = await queryLiveServer('cfx.re/join/abcdef', async url => {
     assert.equal(url, 'https://servers-frontend.fivem.net/api/servers/single/abcdef');
-    return { Data: { clients: 7, svMaxclients: 32, vars: { sv_enforceGameBuild: '3095', sv_pureLevel: '0' } } };
+    return { Data: { clients: 7, svMaxclients: 32, hostname: '^4Long Host', vars: { sv_projectName: '^2Estra RP', sv_enforceGameBuild: '3095', sv_pureLevel: '0' } } };
   });
   assert.equal(result.clients, 7); assert.equal(result.maxClients, 32); assert.equal(result.lockPure, 0);
+  assert.equal(result.projectName, '^2Estra RP');
+  assert.equal(result.hostname, '^4Long Host');
 });
 test('malformed server response is not online', async () => {
   assert.equal((await queryLiveServer('host', async () => ({}))).online, false);
