@@ -13,6 +13,8 @@ export function initDesktopBridge() {
     toggleMaximize: () => { void invoke('window_toggle_maximize_cmd'); },
     close: () => { void invoke('window_close_cmd'); },
     openExternal: url => invoke('open_external_url_cmd', { url }),
+    getStartupSettings: () => invoke('get_startup_settings_cmd'),
+    setStartupSettings: enabled => invoke('set_startup_settings_cmd', { enabled: Boolean(enabled) }),
     setLatestCity: state => {
       void invoke('set_latest_city_cmd', { name: state?.name || '', enabled: !!state?.enabled });
     },

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Bell, Users } from 'lucide-react';
+import { Bell, BookOpen, Users } from 'lucide-react';
 import presenceService from '../services/presenceService';
 import WindowMenu from './WindowMenu';
 
@@ -7,6 +7,7 @@ export default function Header({
   centerTab,
   onChangeTab,
   onOpenPatcher,
+  onOpenGuide,
   hasLauncherUpdate,
   launcherUpdate,
   gameNotice,
@@ -123,6 +124,17 @@ export default function Header({
         {['discord', 'steam'].map(key => (
           <Account key={key} type={key} value={presence[key]} />
         ))}
+
+        <button
+          type="button"
+          className="header-guide-btn"
+          aria-label="คำแนะนำและคู่มือการใช้งาน"
+          title="เปิดคู่มือการตั้งค่าและคำแนะนำการใช้งาน"
+          onClick={onOpenGuide}
+        >
+          <BookOpen size={14} />
+          <span>คำแนะนำ</span>
+        </button>
 
         <div className="notif-wrap" ref={notifRef}>
           <button

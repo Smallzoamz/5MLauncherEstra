@@ -36,6 +36,7 @@ export default function PrelaunchPatcher({
   launcherUpdate,
   onLauncherUpdateChange,
   onOpenPatcherSettings,
+  onOpenUpdateModal,
   onEnterLauncher,
   nextStepLabel = 'เข้าสู่ระบบ / สมัครสมาชิก',
   skipStepLabel = 'ข้ามไปหน้าเข้าสู่ระบบ',
@@ -441,7 +442,11 @@ export default function PrelaunchPatcher({
 
             <div className="prelaunch-dock-right">
               {phase === 'app-update-ready' && (
-                <button type="button" className="btn-action-play" onClick={handleInstallAppUpdate}>
+                <button
+                  type="button"
+                  className="btn-action-play"
+                  onClick={() => (onOpenUpdateModal ? onOpenUpdateModal() : handleInstallAppUpdate())}
+                >
                   <Sparkles size={16} /> อัปเดตเป็น v{launcherUpdate?.version} และรีสตาร์ท
                 </button>
               )}

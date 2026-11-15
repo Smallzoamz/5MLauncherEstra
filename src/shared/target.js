@@ -1,6 +1,20 @@
+function stripConnectPrefix(raw) {
+  let text = raw.trim();
+  if (/^[+/]?connect$/i.test(text)) return '';
+  text = text.replace(/^(?:[+/]?connect\s+)+/i, '').trim();
+  if (
+    (text.startsWith('"') && text.endsWith('"') && text.length >= 2) ||
+    (text.startsWith("'") && text.endsWith("'") && text.length >= 2)
+  ) {
+    text = text.slice(1, -1).trim();
+  }
+  return text;
+}
+
 export function parseTarget(value) {
-  if (typeof value !== 'string' || value.length > 253) throw new Error('กรุณาระบุ IP:port, โดเมน หรือ cfx.re/join/code');
-  const input = value.trim();
+  if (typeof value !== 'string' || value.length > 300) throw new Error('กรุณาระบุ IP:port, โดเมน หรือ cfx.re/join/code');
+  const input = stripConnectPrefix(value);
+  if (!input || input.length > 253) throw new Error('กรุณาระบุ IP:port, โดเมน หรือ cfx.re/join/code');
   const join = input.match(/^(?:https:\/\/)?cfx\.re\/join\/([a-z0-9]{4,16})\/?$/i);
   if (join) return { kind: 'join', code: join[1].toLowerCase(), address: `cfx.re/join/${join[1].toLowerCase()}` };
   const match = input.match(/^([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?::([0-9]{1,5}))?$/i);

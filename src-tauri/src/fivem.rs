@@ -34,11 +34,35 @@ pub struct ParsedTarget {
     pub address: String,
 }
 
+fn strip_connect_prefix(raw: &str) -> &str {
+    static BARE_CONNECT_RE: OnceLock<Regex> = OnceLock::new();
+    let bare_re = BARE_CONNECT_RE.get_or_init(|| Regex::new(r"(?i)^[+/]?connect$").unwrap());
+    let mut text = raw.trim();
+    if bare_re.is_match(text) {
+        return "";
+    }
+    static CONNECT_RE: OnceLock<Regex> = OnceLock::new();
+    let connect_re = CONNECT_RE.get_or_init(|| Regex::new(r"(?i)^(?:[+/]?connect\s+)+").unwrap());
+    if let Some(m) = connect_re.find(text) {
+        text = text[m.end()..].trim();
+    }
+    if ((text.starts_with('"') && text.ends_with('"'))
+        || (text.starts_with('\'') && text.ends_with('\'')))
+        && text.len() >= 2
+    {
+        text = text[1..text.len() - 1].trim();
+    }
+    text
+}
+
 pub fn parse_target(value: &str) -> Result<ParsedTarget, String> {
-    if value.len() > 253 {
+    if value.len() > 300 {
         return Err("กรุณาระบุ IP:port, โดเมน หรือ cfx.re/join/code".into());
     }
-    let input = value.trim();
+    let input = strip_connect_prefix(value);
+    if input.is_empty() || input.len() > 253 {
+        return Err("กรุณาระบุ IP:port, โดเมน หรือ cfx.re/join/code".into());
+    }
     static JOIN_RE: OnceLock<Regex> = OnceLock::new();
     let join_re = JOIN_RE
         .get_or_init(|| Regex::new(r"(?i)^(?:https://)?cfx\.re/join/([a-z0-9]{4,16})/?$").unwrap());
@@ -1236,4 +1260,21 @@ pub async fn install_fivem_bootstrap(target_dir: &str) -> Result<InstallFiveMRes
         gtav,
         message: "ดาวน์โหลดและติดตั้ง FiveM.exe สำเร็จแล้ว (สามารถเปิดเล่นได้ทันที — FiveM จะดาวน์โหลดแคชเพิ่มในครั้งแรก)".into(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_target_strips_connect_prefix_and_preserves_validation() {
+        assert_eq!(parse_target("connect 127.0.0.1").unwrap().address, "127.0.0.1:30120");
+        assert_eq!(parse_target("  CONNECT  play.city.gg:30121  ").unwrap().address, "play.city.gg:30121");
+        assert_eq!(parse_target("+connect \"127.0.0.1:30120\"").unwrap().address, "127.0.0.1:30120");
+        assert_eq!(parse_target("/connect https://cfx.re/join/Ab1234/").unwrap().address, "cfx.re/join/ab1234");
+        assert!(parse_target("connect").is_err());
+        assert!(parse_target("connect   ").is_err());
+        assert!(parse_target("connect host\";quit").is_err());
+        assert!(parse_target("connect http://host").is_err());
+    }
 }

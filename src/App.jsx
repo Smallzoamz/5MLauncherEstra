@@ -12,10 +12,14 @@ import SettingsModal from './components/SettingsModal';
 import NewServerModal from './components/NewServerModal';
 import PatcherModal from './components/PatcherModal';
 import ConfirmModal from './components/ConfirmModal';
+import GuideModal from './components/GuideModal';
+import UpdatePromptModal from './components/UpdatePromptModal';
 import { AlertToastStack } from './components/AlertToastStack';
 import { UserAvatar } from './components/UserAvatar';
 import useDialogFocus from './components/useDialogFocus';
-import { getSavedServers, saveServers, getActiveServerId, saveActiveServerId, getSettings, saveSettings } from './services/storageService';
+import { getSavedServers, saveServers, getActiveServerId, saveActiveServerId, getSettings, saveSettings, hasSeenOnboardingGuide, markOnboardingGuideSeen } from './services/storageService';
+import { fetchServerDirectory, loadCachedServerDirectory } from './services/serverDirectoryService';
+import { applyDirectoryMetadataToServer, lookupDirectoryServer, normalizeDirectoryAddress } from './shared/serverDirectory';
 import { resolveCommunityLinks } from './shared/communityLinks';
 import { queryServerInfo } from './services/fivemService';
 import CityBackground from './components/CityBackground';
@@ -89,6 +93,7 @@ export default function App() {
   const setModal = value => {
     if (settingsBusy) return;
     if (!value && modalClosing) return;
+    if (!value && modal === 'guide') markOnboardingGuideSeen();
     clearTimeout(modalTimer.current);
     if (value) { setModalClosing(false); setVisibleModal(value); return; }
     if (modal === 'mic') audioService.stopMicStream();
@@ -108,11 +113,37 @@ export default function App() {
   const launchLock = useRef(false);
   const [launchFeedback, setLaunchFeedback] = useState(null);
   const [launcherUpdate, setLauncherUpdate] = useState(null);
+  const [updateModalOpen, setUpdateModalOpen] = useState(false);
+  const [dismissedUpdateVersion, setDismissedUpdateVersion] = useState('');
   const [screenStage, setScreenStage] = useState('splash');
   const [presence, setPresence] = useState(presenceService.getPresence());
+  const [directory, setDirectory] = useState(loadCachedServerDirectory);
+  const [guideFirstVisit, setGuideFirstVisit] = useState(() => !hasSeenOnboardingGuide());
   const mustChangePromptedRef = useRef(false);
+  const guideAutoOpenedRef = useRef(false);
 
   useEffect(() => presenceService.subscribe(setPresence), []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchServerDirectory({ signal: controller.signal }).then(entries => {
+      if (!controller.signal.aborted && entries?.length) setDirectory(entries);
+    });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!directory?.length) return;
+    setServers(prev => {
+      let changed = false;
+      const next = prev.map(srv => {
+        const synced = applyDirectoryMetadataToServer(srv, directory);
+        if (synced.changed) changed = true;
+        return synced.server;
+      });
+      return changed ? next : prev;
+    });
+  }, [directory]);
 
   useEffect(() => {
     if (screenStage !== 'launcher') return;
@@ -151,6 +182,21 @@ export default function App() {
       setModal('auth');
     }
   }, [screenStage, social.authenticated, social.user?.mustChangePassword]);
+
+  useEffect(() => {
+    if (launcherUpdate?.available && launcherUpdate?.version && dismissedUpdateVersion !== launcherUpdate.version) {
+      setUpdateModalOpen(true);
+    }
+  }, [launcherUpdate?.available, launcherUpdate?.version, dismissedUpdateVersion]);
+
+  useEffect(() => {
+    if (screenStage !== 'launcher' || !social.authenticated) return;
+    if (social.user?.mustChangePassword) return;
+    if (modal !== null || updateModalOpen || guideAutoOpenedRef.current || hasSeenOnboardingGuide()) return;
+    guideAutoOpenedRef.current = true;
+    setGuideFirstVisit(true);
+    setModal('guide');
+  }, [screenStage, social.authenticated, social.user?.mustChangePassword, modal, updateModalOpen]);
 
   useEffect(() => historyStore.subscribe(setHistory), [historyStore]);
 
@@ -244,6 +290,19 @@ export default function App() {
 
   useEffect(() => {
     let activeDetect = true;
+    if (window.estraWindow?.getStartupSettings) {
+      void window.estraWindow.getStartupSettings()
+        .then(state => {
+          if (!activeDetect || typeof state?.enabled !== 'boolean') return;
+          setSettings(prev => {
+            if (prev.runOnWindowsStartup === state.enabled) return prev;
+            const next = { ...prev, runOnWindowsStartup: state.enabled };
+            try { saveSettings(next); } catch {}
+            return next;
+          });
+        })
+        .catch(() => {});
+    }
     void apiGet(`/api/game-environment?path=${encodeURIComponent(settings.fivemPath || '')}`)
       .then(env => {
         if (!activeDetect || !env?.success) return;
@@ -431,9 +490,23 @@ export default function App() {
     }
   };
 
+  const handleOpenGuide = () => {
+    setGuideFirstVisit(false);
+    setModal('guide');
+  };
+
+  const handleCloseGuide = () => {
+    markOnboardingGuideSeen();
+    setGuideFirstVisit(false);
+    setModal(null);
+  };
+
   const handleJoinFriendServer = (srv, options = {}) => {
     if (!srv?.ip && !srv?.id) return;
-    const match = servers.find(s => s.id === srv.id || s.ip === srv.ip);
+    const normalizedIp = normalizeDirectoryAddress(srv.ip || '') || srv.ip || '';
+    const match = servers.find(
+      s => s.id === srv.id || (normalizedIp && normalizeDirectoryAddress(s.ip) === normalizedIp) || s.ip === srv.ip
+    );
     if (match) {
       handleSelectServer(match.id);
       setCenterTab('general');
@@ -441,11 +514,15 @@ export default function App() {
       if (options.autoLaunch) void launchCity(match);
       return;
     }
+    const dirMatch = lookupDirectoryServer(normalizedIp, directory);
     const created = {
       id: srv.id || crypto.randomUUID(),
-      name: srv.name || srv.ip,
-      ip: srv.ip,
-      tag: 'Roleplay',
+      name: dirMatch?.name || srv.name || normalizedIp,
+      ip: dirMatch?.address || normalizedIp,
+      tag: dirMatch?.tag || 'Roleplay',
+      patchManifestUrl: dirMatch?.patchManifestUrl || '',
+      customBannerUrl: dirMatch?.customBannerUrl || '',
+      directorySlug: dirMatch?.slug || '',
       inGameName: '',
       cl2: false,
       favorite: false,
@@ -640,7 +717,11 @@ export default function App() {
           onEnterLauncher={() => setScreenStage(social.authenticated ? 'launcher' : 'auth')}
           nextStepLabel={social.authenticated ? 'เข้าสู่หน้าลันเชอร์' : 'เข้าสู่ระบบ / สมัครสมาชิก'}
           skipStepLabel={social.authenticated ? 'ข้ามไปหน้าลันเชอร์' : 'ข้ามไปหน้าเข้าสู่ระบบ'}
-          paused={modal !== null}
+          paused={modal !== null || updateModalOpen}
+          onOpenUpdateModal={() => {
+            setDismissedUpdateVersion('');
+            setUpdateModalOpen(true);
+          }}
         />
       ) : screenStage === 'auth' ? (
         <AuthScreen
@@ -673,6 +754,7 @@ export default function App() {
             onOpenMicTest={() => setModal('mic')}
             onOpenPatcher={() => setModal('patcher')}
             onOpenCacheModal={() => setModal('cache')}
+            onOpenGuide={handleOpenGuide}
             hasLauncherUpdate={!!launcherUpdate?.available}
             social={social}
             onOpenAuth={openAccountModal}
@@ -687,6 +769,7 @@ export default function App() {
                 onChangeTab={handleChangeTab}
                 onOpenLibrary={() => setModal('library')}
                 onOpenPatcher={() => setModal('patcher')}
+                onOpenGuide={handleOpenGuide}
                 hasLauncherUpdate={!!launcherUpdate?.available}
                 launcherUpdate={launcherUpdate}
                 gameNotice={gameNotice}
@@ -701,6 +784,7 @@ export default function App() {
               key={active?.id || 'empty'}
               server={active}
               servers={servers}
+              directory={directory}
               centerTab={centerTab}
               onChangeTab={handleChangeTab}
               settings={settings}
@@ -719,6 +803,7 @@ export default function App() {
               onOpenMicTest={() => setModal('mic')}
               onOpenPatcher={() => setModal('patcher')}
               onOpenHistory={() => setModal('history')}
+              onOpenGuide={handleOpenGuide}
               historyEntries={history.entries}
               social={social}
               launcherUpdate={launcherUpdate}
@@ -861,7 +946,28 @@ export default function App() {
       <CacheModal isOpen={modal === 'cache'} onClose={() => setModal(null)} settings={settings} />
       <SettingsModal isOpen={modal === 'settings'} onClose={() => setModal(null)} settings={settings} onSaveSettings={savePrefs} activeServer={active} onMaintenanceBusy={setSettingsBusy} gameEnv={gameEnv} onGameEnvUpdate={setGameEnv} onRequestConfirm={requestConfirm} />
       <PatcherModal isOpen={modal === 'patcher'} onClose={() => setModal(null)} activeServer={active} settings={settings} onUpdateServer={update} launcherUpdate={launcherUpdate} onLauncherUpdateChange={setLauncherUpdate} onBusyChange={setSettingsBusy} onOpenFullPatcher={screenStage === 'launcher' ? () => setScreenStage('splash') : null} onRequestConfirm={requestConfirm} />
-      <NewServerModal isOpen={modal === 'new'} onClose={() => setModal(null)} onAddServer={server => { setServers(prev => [server, ...prev]); setActiveId(server.id); }} />
+      <NewServerModal isOpen={modal === 'new'} onClose={() => setModal(null)} directory={directory} onAddServer={server => { setServers(prev => [server, ...prev]); setActiveId(server.id); }} />
+      <GuideModal
+        isOpen={modal === 'guide'}
+        onClose={handleCloseGuide}
+        settings={settings}
+        gameEnv={gameEnv}
+        servers={servers}
+        isFirstVisit={guideFirstVisit}
+        onOpenSettings={() => { markOnboardingGuideSeen(); setModal('settings'); }}
+        onOpenNewServerModal={() => { markOnboardingGuideSeen(); setModal('new'); }}
+        onOpenMicTest={() => { markOnboardingGuideSeen(); setModal('mic'); }}
+        onOpenCacheModal={() => { markOnboardingGuideSeen(); setModal('cache'); }}
+      />
+      <UpdatePromptModal
+        isOpen={updateModalOpen}
+        launcherUpdate={launcherUpdate}
+        onBusyChange={setSettingsBusy}
+        onClose={() => {
+          if (launcherUpdate?.version) setDismissedUpdateVersion(launcherUpdate.version);
+          setUpdateModalOpen(false);
+        }}
+      />
       <ConfirmModal
         isOpen={!!confirmState}
         title={confirmState?.title}

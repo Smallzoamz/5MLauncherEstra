@@ -2,6 +2,7 @@ import React from 'react';
 import {
   ArrowLeft,
   ArrowRight,
+  BookOpen,
   ChevronDown,
   Gamepad2,
   Globe,
@@ -55,6 +56,7 @@ export default function ServerSidebar({
   onOpenHistory,
   onOpenPatcher,
   onOpenCacheModal,
+  onOpenGuide,
   hasLauncherUpdate,
   social,
   onOpenAuth,
@@ -203,6 +205,15 @@ export default function ServerSidebar({
           >
             <Settings2 size={15} />
             <span>การตั้งค่า</span>
+          </button>
+          <button
+            type="button"
+            className="rail-tool-item"
+            onClick={onOpenGuide}
+            aria-label="คู่มือการใช้งาน"
+          >
+            <BookOpen size={15} />
+            <span>คู่มือการใช้งาน</span>
           </button>
         </div>
       </div>

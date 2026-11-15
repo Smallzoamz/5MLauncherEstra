@@ -6,6 +6,7 @@ pub mod player_name;
 pub mod presence;
 pub mod session;
 pub mod social;
+pub mod startup;
 
 use crate::fivem::{
     detect_game_environment, execute_real_clean_cache, install_fivem_bootstrap, query_live_server,
@@ -23,6 +24,10 @@ use crate::patcher::{
 use crate::presence::{get_system_presence, SystemPresence};
 use crate::session::GameSessionMonitor;
 use crate::social::{social_request, SocialState};
+use crate::startup::{
+    apply_process_priority, get_startup_settings, is_autostart_arg, is_windows_startup_enabled,
+    set_startup_settings, StartupSettingsState,
+};
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use tauri::menu::{MenuBuilder, MenuItem, MenuItemBuilder};
@@ -296,14 +301,32 @@ async fn social_request_cmd(
     social_request(&state.social, method, path, body, social_server_url).await
 }
 
+#[tauri::command]
+fn get_startup_settings_cmd() -> StartupSettingsState {
+    get_startup_settings()
+}
+
+#[tauri::command]
+fn set_startup_settings_cmd(enabled: bool) -> Result<StartupSettingsState, String> {
+    set_startup_settings(enabled)
+}
+
 pub fn run() {
+    let startup_args: Vec<String> = std::env::args().collect();
+    let launched_autostart = is_autostart_arg(&startup_args);
+    if launched_autostart || is_windows_startup_enabled() {
+        let _ = apply_process_priority(true);
+    }
+
     tauri::Builder::default()
         .manage(AppState::default())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            restore_main_window(app);
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if !is_autostart_arg(&args) {
+                restore_main_window(app);
+            }
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(|app| {
+        .setup(move |app| {
             let open_item = MenuItemBuilder::with_id("open", "เปิด Estra FiveM Launcher").build(app)?;
             let launch_latest_item =
                 MenuItemBuilder::with_id("launch-latest", "เข้าเมืองล่าสุด — ยังไม่มีประวัติ")
@@ -377,6 +400,9 @@ pub fn run() {
                     }
                 });
             }
+            if !launched_autostart {
+                restore_main_window(&app.handle());
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -401,6 +427,8 @@ pub fn run() {
             window_close_cmd,
             open_external_url_cmd,
             social_request_cmd,
+            get_startup_settings_cmd,
+            set_startup_settings_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Estra FiveM Launcher");

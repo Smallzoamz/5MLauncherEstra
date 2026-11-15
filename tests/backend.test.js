@@ -12,7 +12,11 @@ test('target normalization and injection rejection', () => {
   assert.equal(parseTarget(' 127.0.0.1 ').address, '127.0.0.1:30120');
   assert.equal(parseTarget('Example.COM:65535').address, 'example.com:65535');
   assert.equal(parseTarget('https://cfx.re/join/Ab1234/').address, 'cfx.re/join/ab1234');
-  for (const bad of ['', null, '1.2.3.999', '127.1', '012.1.1.1', 'host:0', 'host:65536', 'host:abc', 'host/path', 'http://host', 'host&calc', 'host";quit', 'host\n+quit', 'user@host', 'file:///C:/test', 'a..b', '-cl2']) assert.throws(() => parseTarget(bad), String(bad));
+  assert.equal(parseTarget('connect 127.0.0.1').address, '127.0.0.1:30120');
+  assert.equal(parseTarget('  CONNECT   play.city.gg:30121 ').address, 'play.city.gg:30121');
+  assert.equal(parseTarget('+connect "89.38.101.136:30120"').address, '89.38.101.136:30120');
+  assert.equal(parseTarget('/connect https://cfx.re/join/Ab1234/').address, 'cfx.re/join/ab1234');
+  for (const bad of ['', null, 'connect', 'connect   ', 'connect host";quit', 'connect http://host', '1.2.3.999', '127.1', '012.1.1.1', 'host:0', 'host:65536', 'host:abc', 'host/path', 'http://host', 'host&calc', 'host";quit', 'host\n+quit', 'user@host', 'file:///C:/test', 'a..b', '-cl2']) assert.throws(() => parseTarget(bad), String(bad));
 });
 test('query uses actual zero counts and no invented build/pure/count', async () => {
   const result = await queryLiveServer('example.com', async url => url.endsWith('dynamic.json') ? { clients: 0 } : {});

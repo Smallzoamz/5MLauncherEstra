@@ -12,6 +12,7 @@ export default function SettingsModal({ isOpen, onClose, settings, onSaveSetting
   const [installDir, setInstallDir] = useState('');
   const [envInfo, setEnvInfo] = useState(gameEnv || null);
   const [maintenanceBusy, setMaintenanceBusy] = useState(false);
+  const [savingStartup, setSavingStartup] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -19,6 +20,17 @@ export default function SettingsModal({ isOpen, onClose, settings, onSaveSetting
     setMessage('');
     setEnvInfo(gameEnv || null);
     setInstallDir(settings.fivemPath || gameEnv?.suggestedInstallDir || 'D:\\EstraFiveM\\FiveM');
+    let active = true;
+    if (window.estraWindow?.getStartupSettings) {
+      void window.estraWindow.getStartupSettings()
+        .then(state => {
+          if (active && typeof state?.enabled === 'boolean') {
+            setForm(prev => ({ ...prev, runOnWindowsStartup: state.enabled }));
+          }
+        })
+        .catch(() => {});
+    }
+    return () => { active = false; };
   }, [isOpen, settings, gameEnv]);
 
   if (!isOpen) return null;
@@ -77,7 +89,24 @@ export default function SettingsModal({ isOpen, onClose, settings, onSaveSetting
     }
   };
 
-  const busy = maintenanceBusy || installingFiveM;
+  const busy = maintenanceBusy || installingFiveM || savingStartup;
+  const handleSubmit = async e => {
+    e.preventDefault();
+    if (busy) return;
+    setSavingStartup(true);
+    setMessage('');
+    try {
+      if (window.estraWindow?.setStartupSettings) {
+        await window.estraWindow.setStartupSettings(Boolean(form.runOnWindowsStartup));
+      }
+      onSaveSettings(form);
+      onClose();
+    } catch (err) {
+      setMessage(err?.message || 'ไม่สามารถบันทึกการตั้งค่า Run on Windows Start ได้');
+    } finally {
+      setSavingStartup(false);
+    }
+  };
   const exportIni = () => {
     try {
       const url = URL.createObjectURL(new Blob([generateCitizenFXIni(activeServer)], { type: 'text/plain' }));
@@ -87,7 +116,7 @@ export default function SettingsModal({ isOpen, onClose, settings, onSaveSetting
   };
   return <div className="modal-backdrop" onClick={() => !busy && onClose()}><div className="modal-dialog" role="dialog" aria-modal="true" aria-label="การตั้งค่า Launcher" onClick={e => e.stopPropagation()}>
     <div className="modal-header"><div className="modal-title">การตั้งค่า Launcher</div><button className="modal-close-btn" disabled={busy} onClick={onClose} aria-label="ปิด">✕</button></div>
-    <form className="modal-body" onSubmit={e => { e.preventDefault(); if (!busy) { onSaveSettings(form); onClose(); } }}>
+    <form className="modal-body" onSubmit={handleSubmit}>
       <label htmlFor="fivem-path">ตำแหน่ง FiveM.exe หรือโฟลเดอร์ติดตั้ง (รองรับนอก Drive C:)</label>
       <div className="input-container"><input id="fivem-path" disabled={busy} value={form.fivemPath} onChange={e => setForm({ ...form, fivemPath: e.target.value })} placeholder="เว้นว่างเพื่อตรวจหาอัตโนมัติ หรือระบุ D:\EstraFiveM\FiveM" /></div>
       <div className="settings-actions" style={{ justifyContent: 'flex-start' }}>
@@ -140,10 +169,11 @@ export default function SettingsModal({ isOpen, onClose, settings, onSaveSetting
       </details>
 
       {[
+        ['runOnWindowsStartup', 'Run on Windows Start (เปิดอัตโนมัติใน System Tray + Low Priority)', 'เมื่อเปิดเครื่อง โปรแกรมจะรันแบบซ่อนใน System Tray ไม่เด้งขึ้นหน้าจอ และตั้งค่า Process Priority ของตัวเองเป็น Low'],
         ['checkMicBeforeLaunch', 'ตรวจสิทธิ์และเปิดไมโครโฟนก่อนเล่น', 'ตรวจว่าเปิดอุปกรณ์ได้ ส่วนคุณภาพเสียงให้ทดสอบในหน้าเช็คไมค์'],
         ['autoClearCacheBeforeLaunch', 'ล้างแคชก่อนเปิดเกม', 'ลบแคชเซิร์ฟเวอร์ทุกครั้งที่กดเล่น ต้องปิด FiveM ก่อน'],
         ['requireSteamDiscordBeforeLaunch', 'กำหนดให้เปิด Steam และ Discord ก่อนเล่น', 'เปิดตัวเลือกนี้เมื่อเซิร์ฟเวอร์ของคุณกำหนดให้ใช้']
-      ].map(([key, title, help]) => <label className="setting-row" key={key}><span>{title}<small className="help-text">{help}</small></span><input type="checkbox" checked={form[key]} onChange={e => setForm({ ...form, [key]: e.target.checked })} /></label>)}
+      ].map(([key, title, help]) => <label className="setting-row" key={key}><span>{title}<small className="help-text">{help}</small></span><input type="checkbox" disabled={busy} checked={Boolean(form[key])} onChange={e => setForm({ ...form, [key]: e.target.checked })} /></label>)}
       <button type="button" className="btn-action-refresh" disabled={!activeServer?.gameBuild} onClick={exportIni}>ดาวน์โหลดตัวอย่าง Game Build (.ini)</button>
       {message && <p role="status" className="notice">{message}</p>}
       <MaintenanceSettings fivemPath={form.fivemPath} onBusyChange={value => { setMaintenanceBusy(value); onMaintenanceBusy?.(value); }} onRequestConfirm={onRequestConfirm} />

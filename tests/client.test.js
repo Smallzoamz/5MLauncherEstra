@@ -1,21 +1,55 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getSavedServers, saveServers, getSettings, getActiveServerId } from '../src/services/storageService.js';
+import { getSavedServers, saveServers, getSettings, getActiveServerId, hasSeenOnboardingGuide, markOnboardingGuideSeen } from '../src/services/storageService.js';
+import { lookupDirectoryServer, applyDirectoryMetadataToServer, mergeDirectoryEntries } from '../src/shared/serverDirectory.js';
 import { queryServerInfo, launchFiveM } from '../src/services/fivemService.js';
 import audioService from '../src/services/audioService.js';
 
-test('storage recovers malformed data, preserves empty list, strips cached live status', () => {
+test('storage recovers malformed data, starts empty, migrates untouched legacy default, strips cached live status', () => {
   const values = new Map();
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: k => values.get(k), setItem: (k,v) => values.set(k,v) } });
   values.set('fivem_launcher_servers_v3', '{');
-  assert.ok(getSavedServers().length);
-  values.set('fivem_launcher_servers_v3', '{}'); assert.ok(getSavedServers().length);
+  assert.deepEqual(getSavedServers(), []);
+  values.set('fivem_launcher_servers_v3', '{}'); assert.deepEqual(getSavedServers(), []);
+  values.set('fivem_launcher_servers_v3', JSON.stringify([{ id: 'noxtis-legacy', name: 'Noxtis Legacy', ip: '89.38.101.136:30120', inGameName: '', customBannerUrl: '', patchManifestUrl: '' }]));
+  assert.deepEqual(getSavedServers(), []);
   values.set('fivem_launcher_servers_v3', '[]'); assert.deepEqual(getSavedServers(), []);
+  values.delete('estra_empty_default_migrated_v1');
+  values.set('fivem_launcher_servers_v3', JSON.stringify([{ id: 'noxtis-legacy', name: 'Noxtis Legacy', ip: '89.38.101.136:30120', inGameName: 'Custom RP Name' }]));
+  assert.equal(getSavedServers().length, 1);
   saveServers([{ id:'test', ip:'example.com', name:'Test', status:'Online', onlinePlayers:45 }]);
   const s = getSavedServers()[0]; assert.equal(s.status, 'Unknown'); assert.equal(s.onlinePlayers, null);
-  values.set('fivem_launcher_settings_v3', '{"checkMicBeforeLaunch":"yes"}'); assert.equal(getSettings().checkMicBeforeLaunch, true);
+  values.set('fivem_launcher_settings_v3', '{"checkMicBeforeLaunch":"yes","runOnWindowsStartup":true}');
+  assert.equal(getSettings().checkMicBeforeLaunch, true);
+  assert.equal(getSettings().runOnWindowsStartup, true);
+  assert.equal(hasSeenOnboardingGuide(), false);
+  markOnboardingGuideSeen();
+  assert.equal(hasSeenOnboardingGuide(), true);
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, get: () => { throw new Error('blocked'); } });
-  assert.equal(getActiveServerId(), ''); assert.ok(getSavedServers().length); assert.equal(getSettings().fivemPath, '');
+  assert.equal(getActiveServerId(), ''); assert.deepEqual(getSavedServers(), []); assert.equal(getSettings().fivemPath, ''); assert.equal(getSettings().runOnWindowsStartup, false);
+  assert.equal(hasSeenOnboardingGuide(), true);
+});
+test('server directory resolves connect commands, aliases, and syncs canonical metadata', () => {
+  const directory = mergeDirectoryEntries([
+    {
+      slug: 'estra-city',
+      canonical_name: 'Estra Roleplay',
+      primary_address: 'play.estracity.gg:30120',
+      aliases: ['cfx.re/join/abc123', '103.10.20.30'],
+      tag: 'Roleplay',
+      patch_manifest_url: 'https://cdn.example.com/manifest.json'
+    }
+  ]);
+  const byConnect = lookupDirectoryServer('connect play.estracity.gg', directory);
+  assert.equal(byConnect?.name, 'Estra Roleplay');
+  assert.equal(byConnect?.normalizedAddress, 'play.estracity.gg:30120');
+  const byAlias = lookupDirectoryServer('https://cfx.re/join/ABC123/', directory);
+  assert.equal(byAlias?.name, 'Estra Roleplay');
+  const synced = applyDirectoryMetadataToServer({ id: '1', name: 'Old Custom Name', ip: '103.10.20.30:30120', tag: 'Training', patchManifestUrl: '' }, directory);
+  assert.equal(synced.changed, true);
+  assert.equal(synced.server.name, 'Estra Roleplay');
+  assert.equal(synced.server.tag, 'Roleplay');
+  assert.equal(synced.server.patchManifestUrl, 'https://cdn.example.com/manifest.json');
 });
 test('client query network failure never falls back to online', async () => {
   const original = globalThis.fetch;

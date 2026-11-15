@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { parseTarget } from '../shared/target';
+import { lookupDirectoryServer } from '../shared/serverDirectory';
 import presenceService from '../services/presenceService';
 import { bannerImageUrl } from '../shared/serverMedia';
 import { cityBackdrop } from '../shared/cityBackdrop';
@@ -7,8 +8,10 @@ import MicIndicator from './MicIndicator';
 import ServerAvatar from './ServerAvatar';
 import { APP_VERSION, normalizePatchManifestUrl } from '../shared/patcherConfig';
 import {
+  BookOpen,
   Play,
   ArrowUpRight,
+  Plus,
   RefreshCw,
   SlidersHorizontal,
   ShieldCheck,
@@ -26,6 +29,7 @@ import {
 export default function MainLauncher({
   server,
   servers = [],
+  directory = [],
   centerTab = 'general',
   onChangeTab,
   settings,
@@ -42,6 +46,7 @@ export default function MainLauncher({
   onOpenMicTest,
   onOpenPatcher,
   onOpenHistory,
+  onOpenGuide,
   historyEntries = [],
   social,
   launcherUpdate,
@@ -63,11 +68,21 @@ export default function MainLauncher({
     return (
       <main className="main-content empty-state">
         <span className="eyebrow">YOUR NEXT STORY STARTS HERE</span>
-        <h2>ยังไม่มีเซิร์ฟเวอร์ที่บันทึก</h2>
-        <p>เพิ่ม IP หรือ Cfx.re join link เพื่อเริ่มใช้งาน</p>
-        <button className="btn-action-refresh" onClick={onOpenNewServerModal}>
-          เพิ่มเซิร์ฟเวอร์
-        </button>
+        <h2>ยังไม่มีเมืองหรือเซิร์ฟเวอร์ที่บันทึก</h2>
+        <p>
+          วาง IP, Cfx.re join link หรือคำสั่ง <code>connect ...</code> เพื่อเพิ่มเมืองของคุณได้เลย
+          หากเมืองอยู่ในสารบัญกลาง ชื่อเมืองจะแสดงให้อัตโนมัติ
+        </p>
+        <div className="empty-state-actions">
+          <button type="button" className="btn-action-play" onClick={onOpenNewServerModal}>
+            <Plus size={15} />
+            เพิ่มเซิร์ฟเวอร์แรก
+          </button>
+          <button type="button" className="btn-action-refresh" onClick={onOpenGuide}>
+            <BookOpen size={15} />
+            คู่มือการตั้งค่า
+          </button>
+        </div>
       </main>
     );
   }
@@ -81,9 +96,19 @@ export default function MainLauncher({
     }
     try {
       const address = parseTarget(ip).address;
+      const matched = lookupDirectoryServer(address, directory);
       onUpdateServer({
         id: server.id,
         ip: address,
+        ...(matched
+          ? {
+              name: matched.name,
+              tag: matched.tag || server.tag,
+              directorySlug: matched.slug,
+              patchManifestUrl: server.patchManifestUrl || matched.patchManifestUrl || '',
+              customBannerUrl: server.customBannerUrl || matched.customBannerUrl || ''
+            }
+          : { directorySlug: '' }),
         status: 'Unknown',
         onlinePlayers: null,
         maxPlayers: null,
@@ -582,6 +607,8 @@ export default function MainLauncher({
                 <div className="input-container">
                   <input
                     id="server-ip"
+                    maxLength={300}
+                    placeholder="IP:port, cfx.re/join/xxxxx หรือ connect ..."
                     value={editing ? ip : server.ip}
                     readOnly={!editing}
                     onChange={e => setIp(e.target.value)}
