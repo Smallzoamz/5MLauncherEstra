@@ -197,6 +197,13 @@ pub fn verify_ipc_caller(webview: &tauri::Webview, allow_overlay: bool) -> Resul
     Ok(())
 }
 
+pub fn verify_index_html_contents(html: &str, required_refs: &[&str]) -> bool {
+    if html.trim().is_empty() || !html.contains("id=\"root\"") {
+        return false;
+    }
+    required_refs.iter().all(|rel| html.contains(rel))
+}
+
 pub fn verify_embedded_dist_assets(app: &tauri::AppHandle) -> bool {
     if cfg!(debug_assertions) || generated::DIST_ASSET_MANIFEST.is_empty() {
         return true;
@@ -213,7 +220,13 @@ pub fn verify_embedded_dist_assets(app: &tauri::AppHandle) -> bool {
             return false;
         }
     }
-    true
+    let Some(index_asset) = resolver.get("index.html".to_string()) else {
+        return false;
+    };
+    let Ok(index_html) = std::str::from_utf8(&index_asset.bytes) else {
+        return false;
+    };
+    verify_index_html_contents(index_html, generated::INDEX_REQUIRED_REFS)
 }
 
 #[cfg(target_os = "windows")]
@@ -621,5 +634,16 @@ mod tests {
         assert!(!is_allowed_webview_label("overlay", false));
         assert!(is_allowed_webview_label("overlay", true));
         assert!(!is_allowed_webview_label("untrusted", true));
+    }
+
+    #[test]
+    fn index_html_verification_allows_tauri_reserialized_html_and_rejects_tampering() {
+        let tauri_serialized_html = r#"<!DOCTYPE html><html lang="th"><head><meta charset="UTF-8"><script type="module" crossorigin="" src="/assets/index-abc.js"></script><link rel="stylesheet" crossorigin="" href="/assets/index-def.css"></head><body><div id="root"></div></body></html>"#;
+        let refs = ["assets/index-abc.js", "assets/index-def.css"];
+        assert!(verify_index_html_contents(tauri_serialized_html, &refs));
+
+        let tampered = tauri_serialized_html.replace("/assets/index-abc.js", "https://evil.test/payload.js");
+        assert!(!verify_index_html_contents(&tampered, &refs));
+        assert!(!verify_index_html_contents("<html><body></body></html>", &refs));
     }
 }

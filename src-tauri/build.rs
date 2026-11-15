@@ -42,7 +42,7 @@ fn collect_dist_assets(base: &Path, dir: &Path, out: &mut Vec<(String, String)>)
         let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
             continue;
         };
-        if !matches!(ext, "html" | "js" | "css") {
+        if !matches!(ext, "js" | "css") {
             continue;
         }
         println!("cargo:rerun-if-changed={}", path.display());
@@ -94,8 +94,18 @@ fn main() {
 
     let dist_dir = Path::new("../dist");
     let mut dist_assets = Vec::new();
-    if dist_dir.join("index.html").is_file() {
+    let mut index_required_refs = Vec::new();
+    let index_html_path = dist_dir.join("index.html");
+    if index_html_path.is_file() {
+        println!("cargo:rerun-if-changed={}", index_html_path.display());
         collect_dist_assets(dist_dir, dist_dir, &mut dist_assets);
+        if let Ok(index_html) = fs::read_to_string(&index_html_path) {
+            for (rel, _) in &dist_assets {
+                if index_html.contains(rel.as_str()) {
+                    index_required_refs.push(rel.clone());
+                }
+            }
+        }
     }
 
     let mut generated = String::new();
@@ -145,6 +155,12 @@ fn main() {
     generated.push_str("pub const DIST_ASSET_MANIFEST: &[(&str, &str)] = &[\n");
     for (rel, digest) in &dist_assets {
         generated.push_str(&format!("    ({rel:?}, {digest:?}),\n"));
+    }
+    generated.push_str("];\n");
+
+    generated.push_str("pub const INDEX_REQUIRED_REFS: &[&str] = &[\n");
+    for rel in &index_required_refs {
+        generated.push_str(&format!("    {rel:?},\n"));
     }
     generated.push_str("];\n");
 
