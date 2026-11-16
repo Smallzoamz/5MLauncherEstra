@@ -1,5 +1,6 @@
 use crate::file_safety::{assert_no_links, assert_within, normalize_win_path};
 use crate::overlay::{push_overlay_notification, OverlayManager, OverlayNotificationPayload};
+use crate::perf_overlay::{PerfOverlayCaptureGuard, PerfOverlayManager};
 use crate::presence::get_fivem_sessions;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,8 @@ pub struct ScreenshotConfig {
     #[serde(default)]
     pub only_in_game: bool,
     #[serde(default)]
+    pub include_perf_overlay: bool,
+    #[serde(default)]
     pub dir: String,
     #[serde(default)]
     pub city_name: String,
@@ -44,6 +47,7 @@ impl Default for ScreenshotConfig {
             enabled: true,
             hotkey: DEFAULT_HOTKEY.to_string(),
             only_in_game: false,
+            include_perf_overlay: false,
             dir: String::new(),
             city_name: String::new(),
         }
@@ -788,6 +792,7 @@ pub fn capture_screenshot_now(
     app: &AppHandle,
     manager: &ScreenshotManager,
     overlay: Option<&OverlayManager>,
+    perf_overlay: Option<&PerfOverlayManager>,
 ) -> Result<CaptureScreenshotResult, String> {
     let _capture_guard = manager
         .capture_lock
@@ -795,7 +800,11 @@ pub fn capture_screenshot_now(
         .map_err(|_| "ไม่สามารถจับภาพหน้าจอซ้อนกันได้".to_string())?;
     let cfg = manager.snapshot();
     let folder = resolve_screenshots_dir(app, &cfg.dir)?;
-    let (width, height, rgba) = win_impl::capture_active_monitor_rgba()?;
+    let perf_guard = perf_overlay
+        .map(|m| PerfOverlayCaptureGuard::prepare(app, m, cfg.include_perf_overlay));
+    let capture_res = win_impl::capture_active_monitor_rgba();
+    drop(perf_guard);
+    let (width, height, rgba) = capture_res?;
     let png_bytes = encode_rgba_to_png(width, height, &rgba)?;
 
     let slug = win_impl::local_timestamp_slug();
@@ -934,7 +943,12 @@ pub fn open_screenshots_folder(app: &AppHandle, custom_dir: &str) -> Result<Stri
     }
 }
 
-pub fn start_hotkey_listener(app: AppHandle, manager: ScreenshotManager, overlay: OverlayManager) {
+pub fn start_hotkey_listener(
+    app: AppHandle,
+    manager: ScreenshotManager,
+    overlay: OverlayManager,
+    perf_overlay: PerfOverlayManager,
+) {
     #[cfg(target_os = "windows")]
     {
         let _ = std::thread::Builder::new()
@@ -975,7 +989,7 @@ pub fn start_hotkey_listener(app: AppHandle, manager: ScreenshotManager, overlay
                             true
                         };
                         if allow {
-                            if let Err(err) = capture_screenshot_now(&app, &manager, Some(&overlay)) {
+                            if let Err(err) = capture_screenshot_now(&app, &manager, Some(&overlay), Some(&perf_overlay)) {
                                 let _ = app.emit("estra://screenshot-error", err);
                             }
                         }
@@ -987,7 +1001,7 @@ pub fn start_hotkey_listener(app: AppHandle, manager: ScreenshotManager, overlay
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (app, manager, overlay);
+        let _ = (app, manager, overlay, perf_overlay);
     }
 }
 

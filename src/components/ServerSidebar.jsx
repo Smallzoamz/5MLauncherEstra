@@ -26,6 +26,7 @@ import { COMMUNITY_CHANNELS } from '../shared/communityLinks';
 import { CATEGORY_TAGS, DEFAULT_SERVER_TAG, normalizeServerTag } from '../shared/serverTags';
 
 const SIDEBAR_CAT_STORAGE_KEY = 'estra_sidebar_tag_categories_v1';
+const SIDEBAR_TOOLS_STORAGE_KEY = 'estra_sidebar_tools_open_v1';
 
 function loadCategoryPrefs() {
   try {
@@ -34,6 +35,16 @@ function loadCategoryPrefs() {
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
+  }
+}
+
+function loadToolsOpen() {
+  try {
+    const raw = localStorage.getItem(SIDEBAR_TOOLS_STORAGE_KEY);
+    if (raw === '0' || raw === 'false') return false;
+    return true;
+  } catch {
+    return true;
   }
 }
 
@@ -113,7 +124,16 @@ export default function ServerSidebar({
 }) {
   const user = social?.authenticated ? social.user : null;
   const [categoryPrefs, setCategoryPrefs] = useState(loadCategoryPrefs);
+  const [toolsOpen, setToolsOpen] = useState(loadToolsOpen);
   const favoriteServers = servers.filter(s => s.favorite);
+
+  const toggleTools = () => {
+    setToolsOpen(prev => {
+      const next = !prev;
+      try { localStorage.setItem(SIDEBAR_TOOLS_STORAGE_KEY, next ? '1' : '0'); } catch {}
+      return next;
+    });
+  };
 
   const groupedByTag = new Map();
   for (const tag of CATEGORY_TAGS) groupedByTag.set(tag, []);
@@ -201,180 +221,193 @@ export default function ServerSidebar({
         </button>
       </div>
 
-      <nav className="rail-primary-nav" aria-label="นำทางหลัก">
-        <button
-          type="button"
-          className={`rail-nav-item${centerTab === 'general' ? ' active' : ''}`}
-          onClick={() => onChangeTab('general')}
-        >
-          <Home size={16} />
-          <span>หน้าหลัก</span>
-        </button>
-        <button
-          type="button"
-          className="rail-nav-item"
-          onClick={onOpenLibrary}
-          aria-label="ค้นหาเมือง"
-        >
-          <Search size={16} />
-          <span>ค้นหาเมือง</span>
-        </button>
-        <button
-          type="button"
-          className={`rail-nav-item${hasLauncherUpdate ? ' has-update-badge' : ''}`}
-          onClick={onOpenPatcher}
-          aria-label="ศูนย์แพตช์และอัปเดต"
-        >
-          <PackageCheck size={16} />
-          <span>แพตช์ &amp; อัปเดต</span>
-        </button>
-        <button
-          type="button"
-          className="rail-nav-item"
-          onClick={onOpenLibrary}
-          aria-label="ดูรายการเมืองทั้งหมด"
-        >
-          <Gamepad2 size={16} />
-          <span>เมืองของฉัน</span>
-          <span className="rail-nav-count">{servers.length}</span>
-        </button>
-      </nav>
+      <div className="rail-scroll-area">
+        <nav className="rail-primary-nav" aria-label="นำทางหลัก">
+          <button
+            type="button"
+            className={`rail-nav-item${centerTab === 'general' ? ' active' : ''}`}
+            onClick={() => onChangeTab('general')}
+          >
+            <Home size={16} />
+            <span>หน้าหลัก</span>
+          </button>
+          <button
+            type="button"
+            className="rail-nav-item"
+            onClick={onOpenLibrary}
+            aria-label="ค้นหาเมือง"
+          >
+            <Search size={16} />
+            <span>ค้นหาเมือง</span>
+          </button>
+          <button
+            type="button"
+            className={`rail-nav-item${hasLauncherUpdate ? ' has-update-badge' : ''}`}
+            onClick={onOpenPatcher}
+            aria-label="ศูนย์แพตช์และอัปเดต"
+          >
+            <PackageCheck size={16} />
+            <span>แพตช์ &amp; อัปเดต</span>
+          </button>
+          <button
+            type="button"
+            className="rail-nav-item"
+            onClick={onOpenLibrary}
+            aria-label="ดูรายการเมืองทั้งหมด"
+          >
+            <Gamepad2 size={16} />
+            <span>เมืองของฉัน</span>
+            <span className="rail-nav-count">{servers.length}</span>
+          </button>
+        </nav>
 
-      <div className="rail-section-divider" />
+        <div className="rail-section-divider" />
 
-      <div className="rail-section">
-        <span className="rail-section-label">My tools</span>
-        <div className="rail-tools-list">
+        <div className="rail-section rail-tools-section">
           <button
             type="button"
-            className={`rail-tool-item${centerTab === 'screenshots' ? ' active' : ''}`}
-            onClick={() => onChangeTab('screenshots')}
-            aria-label="คลังภาพหน้าจอ"
+            className={`rail-tools-toggle${toolsOpen ? ' open' : ''}`}
+            aria-expanded={toolsOpen}
+            onClick={toggleTools}
           >
-            <Camera size={15} />
-            <span>คลังภาพหน้าจอ</span>
+            <span className="rail-section-label">My tools</span>
+            {toolsOpen ? <ChevronDown size={13} className="rail-tools-chevron" /> : <ChevronRight size={13} className="rail-tools-chevron" />}
           </button>
-          <button
-            type="button"
-            className="rail-tool-item"
-            onClick={onOpenHistory}
-            aria-label="ประวัติการเปิดเกม"
-          >
-            <History size={15} />
-            <span>ประวัติการเปิดเกม</span>
-          </button>
-          <button
-            type="button"
-            className="rail-tool-item"
-            onClick={onOpenMicTest}
-            aria-label="เปิดห้องทดสอบเสียง"
-          >
-            <Headphones size={15} />
-            <span>ทดสอบไมค์ &amp; เสียง</span>
-          </button>
-          <button
-            type="button"
-            className="rail-tool-item"
-            onClick={onOpenCacheModal}
-            aria-label="เปิดหน้าล้างแคช"
-          >
-            <Trash2 size={15} />
-            <span>ล้างแคช FiveM</span>
-          </button>
-          <button
-            type="button"
-            className="rail-tool-item"
-            onClick={onOpenSettings}
-            aria-label="การตั้งค่า"
-          >
-            <Settings2 size={15} />
-            <span>การตั้งค่า</span>
-          </button>
-          <button
-            type="button"
-            className="rail-tool-item"
-            onClick={onOpenGuide}
-            aria-label="คู่มือการใช้งาน"
-          >
-            <BookOpen size={15} />
-            <span>คู่มือการใช้งาน</span>
-          </button>
-        </div>
-      </div>
-
-      <div className="rail-section-divider" />
-
-      <div className="rail-section rail-favorites-section">
-        <div className="rail-section-head">
-          <span className="rail-section-label">My favorites</span>
-          <button
-            type="button"
-            className="rail-add-fav-btn"
-            onClick={onOpenNewServerModal}
-            aria-label="+ NEW"
-            title="เพิ่มเมืองใหม่"
-          >
-            <Plus size={14} />
-          </button>
-        </div>
-
-        <div className="rail-servers">
-          {favoriteServers.length > 0 ? (
-            favoriteServers.map(server => (
-              <SidebarServerRow
-                key={`fav-${server.id}`}
-                server={server}
-                activeServerId={activeServerId}
-                onSelectServer={onSelectServer}
-                onToggleFavoriteServer={onToggleFavoriteServer}
-              />
-            ))
-          ) : (
-            <p className="rail-cat-hint">กด ★ ที่ชื่อเมืองเพื่อปักหมุดไว้ด้านบน</p>
+          {toolsOpen && (
+            <div className="rail-tools-list">
+              <button
+                type="button"
+                className={`rail-tool-item${centerTab === 'screenshots' ? ' active' : ''}`}
+                onClick={() => onChangeTab('screenshots')}
+                aria-label="คลังภาพหน้าจอ"
+              >
+                <Camera size={15} />
+                <span>คลังภาพหน้าจอ</span>
+              </button>
+              <button
+                type="button"
+                className="rail-tool-item"
+                onClick={onOpenHistory}
+                aria-label="ประวัติการเปิดเกม"
+              >
+                <History size={15} />
+                <span>ประวัติการเปิดเกม</span>
+              </button>
+              <button
+                type="button"
+                className="rail-tool-item"
+                onClick={onOpenMicTest}
+                aria-label="เปิดห้องทดสอบเสียง"
+              >
+                <Headphones size={15} />
+                <span>ทดสอบไมค์ &amp; เสียง</span>
+              </button>
+              <button
+                type="button"
+                className="rail-tool-item"
+                onClick={onOpenCacheModal}
+                aria-label="เปิดหน้าล้างแคช"
+              >
+                <Trash2 size={15} />
+                <span>ล้างแคช FiveM</span>
+              </button>
+              <button
+                type="button"
+                className="rail-tool-item"
+                onClick={onOpenSettings}
+                aria-label="การตั้งค่า"
+              >
+                <Settings2 size={15} />
+                <span>การตั้งค่า</span>
+              </button>
+              <button
+                type="button"
+                className="rail-tool-item"
+                onClick={onOpenGuide}
+                aria-label="คู่มือการใช้งาน"
+              >
+                <BookOpen size={15} />
+                <span>คู่มือการใช้งาน</span>
+              </button>
+            </div>
           )}
+        </div>
 
-          <div className="rail-categories-head">
-            <span className="rail-section-label">Categories</span>
+        <div className="rail-section-divider" />
+
+        <div className="rail-section rail-favorites-section">
+          <div className="rail-section-head">
+            <span className="rail-section-label">My favorites</span>
+            <button
+              type="button"
+              className="rail-add-fav-btn"
+              onClick={onOpenNewServerModal}
+              aria-label="+ NEW"
+              title="เพิ่มเมืองใหม่"
+            >
+              <Plus size={14} />
+            </button>
           </div>
 
-          <div className="rail-categories-list">
-            {categorySections.map(section => {
-              const open = isCategoryOpen(section);
-              return (
-                <div key={section.key} className="rail-cat-group">
-                  <button
-                    type="button"
-                    className={`rail-cat-toggle${open ? ' open' : ''}`}
-                    aria-expanded={open}
-                    onClick={() => toggleCategory(section)}
-                  >
-                    <span className="rail-cat-title">
-                      {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                      <span>{section.label}</span>
-                    </span>
-                    <span className="rail-cat-count">{section.items.length}</span>
-                  </button>
-                  {open && (
-                    <div className="rail-cat-items">
-                      {section.items.length > 0 ? (
-                        section.items.map(server => (
-                          <SidebarServerRow
-                            key={`cat-${section.key}-${server.id}`}
-                            server={server}
-                            activeServerId={activeServerId}
-                            onSelectServer={onSelectServer}
-                            onToggleFavoriteServer={onToggleFavoriteServer}
-                            showTagMeta={false}
-                          />
-                        ))
-                      ) : (
-                        <p className="rail-cat-empty">ยังไม่มีเมืองในหมวดนี้</p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+          <div className="rail-servers">
+            {favoriteServers.length > 0 ? (
+              favoriteServers.map(server => (
+                <SidebarServerRow
+                  key={`fav-${server.id}`}
+                  server={server}
+                  activeServerId={activeServerId}
+                  onSelectServer={onSelectServer}
+                  onToggleFavoriteServer={onToggleFavoriteServer}
+                />
+              ))
+            ) : (
+              <p className="rail-cat-hint">กด ★ ที่ชื่อเมืองเพื่อปักหมุดไว้ด้านบน</p>
+            )}
+
+            <div className="rail-categories-head">
+              <span className="rail-section-label">Categories</span>
+              <span className="rail-categories-total">{servers.length}</span>
+            </div>
+
+            <div className="rail-categories-list">
+              {categorySections.map(section => {
+                const open = isCategoryOpen(section);
+                return (
+                  <div key={section.key} className="rail-cat-group">
+                    <button
+                      type="button"
+                      className={`rail-cat-toggle${open ? ' open' : ''}`}
+                      aria-expanded={open}
+                      onClick={() => toggleCategory(section)}
+                    >
+                      <span className="rail-cat-title">
+                        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        <span>{section.label}</span>
+                      </span>
+                      <span className="rail-cat-count">{section.items.length}</span>
+                    </button>
+                    {open && (
+                      <div className="rail-cat-items">
+                        {section.items.length > 0 ? (
+                          section.items.map(server => (
+                            <SidebarServerRow
+                              key={`cat-${section.key}-${server.id}`}
+                              server={server}
+                              activeServerId={activeServerId}
+                              onSelectServer={onSelectServer}
+                              onToggleFavoriteServer={onToggleFavoriteServer}
+                              showTagMeta={false}
+                            />
+                          ))
+                        ) : (
+                          <p className="rail-cat-empty">ยังไม่มีเมืองในหมวดนี้</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>

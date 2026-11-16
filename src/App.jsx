@@ -27,6 +27,7 @@ import CityBackground from './components/CityBackground';
 import audioService from './services/audioService';
 import presenceService from './services/presenceService';
 import { playShutterSound, syncScreenshotSettings } from './services/screenshotService';
+import { syncPerfOverlaySettings } from './services/perfOverlayService';
 import {
   detectFriendOverlayTransitions,
   playOverlayFriendChime,
@@ -351,6 +352,7 @@ export default function App() {
     settings.screenshotEnabled,
     settings.screenshotHotkey,
     settings.screenshotOnlyInGame,
+    settings.perfOverlayIncludeInScreenshots,
     settings.screenshotDir,
     active?.name
   ]);
@@ -362,6 +364,15 @@ export default function App() {
     settings.overlayNotifyScreenshot,
     settings.overlayNotifyFriendOnline,
     settings.overlayNotifyFriendInGame
+  ]);
+
+  useEffect(() => {
+    void syncPerfOverlaySettings(settings).catch(() => {});
+  }, [
+    settings.perfOverlayEnabled,
+    settings.perfOverlayOnlyInGame,
+    settings.perfOverlayIncludeInScreenshots,
+    settings.perfOverlayPosition
   ]);
 
   useEffect(() => {

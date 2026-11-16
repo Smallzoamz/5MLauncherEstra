@@ -19,6 +19,7 @@ export function buildScreenshotConfigPayload(settings, cityName = '') {
     enabled: settings?.screenshotEnabled !== false,
     hotkey: normalizeScreenshotHotkey(settings?.screenshotHotkey),
     onlyInGame: Boolean(settings?.screenshotOnlyInGame),
+    includePerfOverlay: Boolean(settings?.perfOverlayIncludeInScreenshots),
     dir: typeof settings?.screenshotDir === 'string' ? settings.screenshotDir.trim() : '',
     cityName: typeof cityName === 'string' ? cityName.trim() : ''
   };

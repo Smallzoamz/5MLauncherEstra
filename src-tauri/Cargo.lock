@@ -1016,7 +1016,7 @@ dependencies = [
 
 [[package]]
 name = "estra-fivem-launcher"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
@@ -1036,6 +1036,7 @@ dependencies = [
  "url",
  "uuid",
  "webview2-com",
+ "windows",
  "winreg 0.52.0",
 ]
 

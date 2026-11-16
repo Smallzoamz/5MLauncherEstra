@@ -3,6 +3,7 @@ import { apiGet, apiPost } from '../services/apiService';
 import { generateCitizenFXIni } from '../services/fivemService';
 import { APP_VERSION } from '../shared/patcherConfig';
 import { SCREENSHOT_HOTKEYS } from '../services/screenshotService';
+import { PERF_OVERLAY_POSITIONS } from '../services/perfOverlayService';
 import { playOverlayFriendChime, pushOverlayNotification } from '../services/overlayService';
 import MaintenanceSettings from './MaintenanceSettings';
 
@@ -209,6 +210,10 @@ export default function SettingsModal({ isOpen, onClose, settings, onSaveSetting
             <span>เล่นเสียงชัตเตอร์และแจ้งเตือนเมื่อถ่ายภาพ<small className="help-text">ส่งเสียงคลิกเบาๆ เมื่อบันทึกภาพหน้าจอสำเร็จ</small></span>
             <input type="checkbox" disabled={busy} checked={form.screenshotPlaySound !== false} onChange={e => setForm({ ...form, screenshotPlaySound: e.target.checked })} />
           </label>
+          <label className="setting-row">
+            <span>ให้ติดแถบ Performance (FPS / CPU / GPU) ไปในภาพที่แคปด้วย<small className="help-text">หากเปิด จะบันทึกแถบ FPS / CPU / GPU ลงในรูปเมื่อกด {form.screenshotHotkey || 'F12'} • หากปิด จะซ่อนแถบนี้ชั่วขณะก่อนแคปโดยอัตโนมัติ</small></span>
+            <input type="checkbox" disabled={busy || form.screenshotEnabled === false} checked={Boolean(form.perfOverlayIncludeInScreenshots)} onChange={e => setForm({ ...form, perfOverlayIncludeInScreenshots: e.target.checked })} />
+          </label>
           <div style={{ marginTop: 10 }}>
             <label htmlFor="screenshot-dir">โฟลเดอร์เก็บรูปภาพ (เว้นว่างเพื่อใช้โฟลเดอร์ของโปรแกรม)</label>
             <div className="input-container">
@@ -283,6 +288,41 @@ export default function SettingsModal({ isOpen, onClose, settings, onSaveSetting
             >
               ทดสอบแจ้งเตือน Overlay
             </button>
+          </div>
+        </div>
+      </details>
+
+      <details className="configuration-panel patch-template-panel" open>
+        <summary>
+          <span>Performance Overlay (FPS / CPU / GPU)</span>
+        </summary>
+        <div className="patch-template-body">
+          <label className="setting-row">
+            <span>เปิดแสดง Performance Overlay (FPS / CPU / GPU)<small className="help-text">แสดงตัวเลข FPS, CPU % และ GPU % บนหน้าจอแบบไม่แย่งโฟกัสเมาส์หรือคีย์บอร์ด (แนะนำให้เกมใช้ Windowed / Borderless)</small></span>
+            <input type="checkbox" disabled={busy} checked={Boolean(form.perfOverlayEnabled)} onChange={e => setForm({ ...form, perfOverlayEnabled: e.target.checked })} />
+          </label>
+          <label className="setting-row">
+            <span>ให้ติดแถบนี้ไปด้วยเมื่อกด {form.screenshotHotkey || 'F12'} แคปหน้าจอ<small className="help-text">เปิด = แถบ FPS / CPU / GPU ติดไปในภาพแคปด้วย • ปิด = ซ่อนแถบชั่วคราวขณะแคปภาพ</small></span>
+            <input type="checkbox" disabled={busy || !form.perfOverlayEnabled} checked={Boolean(form.perfOverlayIncludeInScreenshots)} onChange={e => setForm({ ...form, perfOverlayIncludeInScreenshots: e.target.checked })} />
+          </label>
+          <label className="setting-row">
+            <span>แสดงเฉพาะตอนเปิด FiveM อยู่เท่านั้น<small className="help-text">หากเปิด แถบประสิทธิภาพจะซ่อนอัตโนมัติเมื่อยังไม่ได้เปิดเกม FiveM</small></span>
+            <input type="checkbox" disabled={busy || !form.perfOverlayEnabled} checked={Boolean(form.perfOverlayOnlyInGame)} onChange={e => setForm({ ...form, perfOverlayOnlyInGame: e.target.checked })} />
+          </label>
+          <div style={{ marginTop: 10 }}>
+            <label htmlFor="perf-overlay-position">ตำแหน่งแสดงผลบนหน้าจอ</label>
+            <div className="input-container">
+              <select
+                id="perf-overlay-position"
+                disabled={busy || !form.perfOverlayEnabled}
+                value={form.perfOverlayPosition || 'top-left'}
+                onChange={e => setForm({ ...form, perfOverlayPosition: e.target.value })}
+              >
+                {PERF_OVERLAY_POSITIONS.map(pos => (
+                  <option key={pos.value} value={pos.value}>{pos.label}</option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
       </details>

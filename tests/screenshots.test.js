@@ -10,6 +10,12 @@ import {
   detectFriendOverlayTransitions,
   shouldDeliverOverlay
 } from '../src/services/overlayService.js';
+import {
+  buildPerfOverlaySettingsPayload,
+  formatPerfMetric,
+  normalizePerfOverlayPosition,
+  syncPerfOverlaySettings
+} from '../src/services/perfOverlayService.js';
 import { DEFAULT_SETTINGS, getSettings, saveSettings } from '../src/services/storageService.js';
 
 function withMockLocalStorage(fn) {
@@ -43,6 +49,7 @@ test('screenshotService normalizes hotkeys, formats bytes, and builds IPC payloa
       screenshotEnabled: true,
       screenshotHotkey: 'ctrl+f11',
       screenshotOnlyInGame: true,
+      perfOverlayIncludeInScreenshots: true,
       screenshotDir: '  D:\\EstraShots  '
     },
     '  Los Santos City  '
@@ -51,6 +58,7 @@ test('screenshotService normalizes hotkeys, formats bytes, and builds IPC payloa
     enabled: true,
     hotkey: 'Ctrl+F11',
     onlyInGame: true,
+    includePerfOverlay: true,
     dir: 'D:\\EstraShots',
     cityName: 'Los Santos City'
   });
@@ -71,6 +79,7 @@ test('screenshotService normalizes hotkeys, formats bytes, and builds IPC payloa
       enabled: false,
       hotkey: 'F9',
       onlyInGame: false,
+      includePerfOverlay: false,
       dir: '',
       cityName: 'Test City'
     });
@@ -104,6 +113,74 @@ test('storageService persists screenshot preferences with safe defaults', () => 
     assert.equal(loaded.screenshotPlaySound, false);
     assert.equal(loaded.screenshotDir, 'D:\\MyShots');
   });
+});
+
+test('perfOverlayService builds IPC payloads, formats metrics, and persists F12 capture option', async () => {
+  assert.equal(normalizePerfOverlayPosition('TOP-RIGHT'), 'top-right');
+  assert.equal(normalizePerfOverlayPosition('unknown'), 'top-left');
+  assert.equal(formatPerfMetric(null, '%'), '--');
+  assert.equal(formatPerfMetric(64.6, '%'), '65%');
+  assert.equal(formatPerfMetric(119.8), '120');
+
+  const payload = buildPerfOverlaySettingsPayload({
+    perfOverlayEnabled: true,
+    perfOverlayOnlyInGame: true,
+    perfOverlayIncludeInScreenshots: true,
+    perfOverlayPosition: 'bottom-left'
+  });
+  assert.deepEqual(payload, {
+    enabled: true,
+    onlyInGame: true,
+    includeInScreenshots: true,
+    position: 'bottom-left'
+  });
+
+  withMockLocalStorage(() => {
+    assert.equal(DEFAULT_SETTINGS.perfOverlayEnabled, false);
+    assert.equal(DEFAULT_SETTINGS.perfOverlayIncludeInScreenshots, false);
+    assert.equal(DEFAULT_SETTINGS.perfOverlayPosition, 'top-left');
+
+    saveSettings({
+      ...DEFAULT_SETTINGS,
+      perfOverlayEnabled: true,
+      perfOverlayOnlyInGame: true,
+      perfOverlayIncludeInScreenshots: true,
+      perfOverlayPosition: 'top-right'
+    });
+
+    const loaded = getSettings();
+    assert.equal(loaded.perfOverlayEnabled, true);
+    assert.equal(loaded.perfOverlayOnlyInGame, true);
+    assert.equal(loaded.perfOverlayIncludeInScreenshots, true);
+    assert.equal(loaded.perfOverlayPosition, 'top-right');
+  });
+
+  const prevWindow = globalThis.window;
+  let sent = null;
+  globalThis.window = {
+    estraWindow: {
+      setPerfOverlaySettings: async cfg => {
+        sent = cfg;
+        return cfg;
+      }
+    }
+  };
+  try {
+    await syncPerfOverlaySettings({
+      perfOverlayEnabled: true,
+      perfOverlayIncludeInScreenshots: false,
+      perfOverlayPosition: 'bottom-right'
+    });
+    assert.deepEqual(sent, {
+      enabled: true,
+      onlyInGame: false,
+      includeInScreenshots: false,
+      position: 'bottom-right'
+    });
+  } finally {
+    if (prevWindow === undefined) delete globalThis.window;
+    else globalThis.window = prevWindow;
+  }
 });
 
 test('overlayService detects friend online and in-game transitions without initial login spam', () => {

@@ -3,6 +3,7 @@ pub mod fivem;
 pub mod maintenance;
 pub mod overlay;
 pub mod patcher;
+pub mod perf_overlay;
 pub mod player_name;
 pub mod presence;
 pub mod screenshots;
@@ -27,6 +28,9 @@ use crate::patcher::{
 use crate::overlay::{
     ensure_overlay_window, hide_overlay_window, push_overlay_notification, OverlayManager,
     OverlayNotificationPayload, OverlaySettings,
+};
+use crate::perf_overlay::{
+    ensure_perf_overlay_window, PerfMetricsSnapshot, PerfOverlayManager, PerfOverlaySettings,
 };
 use crate::presence::{get_system_presence, SystemPresence};
 use crate::screenshots::{
@@ -57,6 +61,7 @@ pub struct AppState {
     pub social: SocialState,
     pub screenshots: ScreenshotManager,
     pub overlay: OverlayManager,
+    pub perf_overlay: PerfOverlayManager,
 }
 
 impl Default for AppState {
@@ -70,6 +75,7 @@ impl Default for AppState {
             social: SocialState::default(),
             screenshots: ScreenshotManager::default(),
             overlay: OverlayManager::default(),
+            perf_overlay: PerfOverlayManager::default(),
         }
     }
 }
@@ -371,9 +377,12 @@ async fn capture_screenshot_cmd(
     crate::security::verify_ipc_caller(&webview, false)?;
     let manager = state.screenshots.clone();
     let overlay = state.overlay.clone();
-    tokio::task::spawn_blocking(move || capture_screenshot_now(&app, &manager, Some(&overlay)))
-        .await
-        .map_err(|_| "จับภาพหน้าจอไม่สำเร็จ".to_string())?
+    let perf_overlay = state.perf_overlay.clone();
+    tokio::task::spawn_blocking(move || {
+        capture_screenshot_now(&app, &manager, Some(&overlay), Some(&perf_overlay))
+    })
+    .await
+    .map_err(|_| "จับภาพหน้าจอไม่สำเร็จ".to_string())?
 }
 
 #[tauri::command]
@@ -476,6 +485,26 @@ fn drain_overlay_pending_cmd(state: State<'_, AppState>) -> Vec<OverlayNotificat
 #[tauri::command]
 fn hide_overlay_window_cmd(app: AppHandle) {
     hide_overlay_window(&app);
+}
+
+#[tauri::command]
+fn set_perf_overlay_settings_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: PerfOverlaySettings,
+) -> Result<PerfOverlaySettings, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    state.perf_overlay.update_settings(&app, settings)
+}
+
+#[tauri::command]
+fn get_perf_metrics_snapshot_cmd(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+) -> Result<PerfMetricsSnapshot, String> {
+    crate::security::verify_ipc_caller(&webview, true)?;
+    Ok(state.perf_overlay.snapshot_metrics())
 }
 
 pub fn run() {
@@ -588,11 +617,13 @@ pub fn run() {
             if let Some(overlay_win) = app.get_webview_window("overlay") {
                 security::lock_webview_window(&overlay_win);
             }
+            let _ = ensure_perf_overlay_window(&app.handle());
             let app_state = app.state::<AppState>();
             start_hotkey_listener(
                 app.handle().clone(),
                 app_state.screenshots.clone(),
                 app_state.overlay.clone(),
+                app_state.perf_overlay.clone(),
             );
             Ok(())
         })
@@ -631,6 +662,8 @@ pub fn run() {
             push_overlay_notification_cmd,
             drain_overlay_pending_cmd,
             hide_overlay_window_cmd,
+            set_perf_overlay_settings_cmd,
+            get_perf_metrics_snapshot_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Estra FiveM Launcher");

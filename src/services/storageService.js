@@ -15,6 +15,8 @@ export const DEFAULT_SETTINGS = {
   screenshotPlaySound: true, screenshotDir: '',
   overlayNotificationsEnabled: true, overlayNotifyScreenshot: true,
   overlayNotifyFriendOnline: true, overlayNotifyFriendInGame: true,
+  perfOverlayEnabled: false, perfOverlayOnlyInGame: false,
+  perfOverlayIncludeInScreenshots: false, perfOverlayPosition: 'top-left',
   githubRepo: DEFAULT_GITHUB_REPO, socialServerUrl: SUPABASE_SOCIAL_GATEWAY_URL,
   websiteUrl: 'https://estralauncher.vercel.app/',
   discordUrl: 'https://discord.gg/WYjfK6FWgB',

@@ -83,6 +83,18 @@ export function initDesktopBridge() {
         else unlisten();
       });
       return () => { active = false; unlistenFn?.(); };
+    },
+    setPerfOverlaySettings: settings => invoke('set_perf_overlay_settings_cmd', { settings }),
+    getPerfOverlaySnapshot: () => invoke('get_perf_metrics_snapshot_cmd'),
+    onPerfMetrics: callback => {
+      if (typeof callback !== 'function') return () => {};
+      let active = true;
+      let unlistenFn = null;
+      void listen('estra://perf-metrics', event => { if (active) callback(event.payload); }).then(unlisten => {
+        if (active) unlistenFn = unlisten;
+        else unlisten();
+      });
+      return () => { active = false; unlistenFn?.(); };
     }
   });
 }
