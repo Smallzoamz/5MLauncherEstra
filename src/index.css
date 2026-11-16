@@ -195,7 +195,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 }
 
 .rail-scroll-area {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
@@ -204,17 +204,18 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
   gap: 8px;
   padding-right: 4px;
   scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.36) transparent;
+}
+.rail-scroll-area > * {
+  flex: 0 0 auto;
 }
 .rail-scroll-area::-webkit-scrollbar { width: 5px; }
 .rail-scroll-area::-webkit-scrollbar-track { background: transparent; }
 .rail-scroll-area::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.32);
+  background: rgba(148, 163, 184, 0.28);
   border-radius: 999px;
 }
 .rail-scroll-area::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.52);
+  background: rgba(148, 163, 184, 0.5);
 }
 
 .rail-primary-nav {
@@ -252,9 +253,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
   border-radius: 999px;
 }
 
-.rail-section-divider { height: 1px; background: var(--border-subtle); margin: 2px 4px; }
+.rail-section-divider { height: 1px; background: var(--border-subtle); margin: 2px 4px; flex-shrink: 0; }
 
-.rail-section { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.rail-section { display: flex; flex-direction: column; gap: 6px; flex: 0 0 auto; }
 .rail-section-head { display: flex; align-items: center; justify-content: space-between; padding: 0 6px; }
 .rail-section-label { font-size: 11px; font-weight: 600; color: var(--text-dark); padding: 0 6px; }
 .rail-section-head .rail-section-label { padding: 0; }

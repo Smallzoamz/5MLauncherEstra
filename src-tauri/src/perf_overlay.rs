@@ -91,8 +91,9 @@ pub fn aggregate_gpu_engine_utilization(entries: &[(&str, f64)]) -> u8 {
         }
         let clamped = val.clamp(0.0, 100.0);
         let engine_key = name
-            .rsplit_once("_engtype_")
+            .split_once("_luid_")
             .map(|(_, suffix)| suffix)
+            .or_else(|| name.rsplit_once("_engtype_").map(|(_, suffix)| suffix))
             .unwrap_or(*name);
         let sum = per_engine.entry(engine_key).or_insert(0.0);
         *sum = (*sum + clamped).clamp(0.0, 100.0);
@@ -295,6 +296,9 @@ mod win_perf {
         PdhOpenQueryW, PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_DOUBLE, PDH_HCOUNTER, PDH_HQUERY,
     };
     use windows::Win32::System::Threading::GetSystemTimes;
+    use windows::Win32::UI::HiDpi::{
+        SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos,
         GWL_EXSTYLE, HWND_TOPMOST, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SWP_NOSENDCHANGING,
@@ -456,10 +460,10 @@ mod win_perf {
                 }
                 return;
             }
-            let _ = unsafe { PdhCollectQueryData(query) };
+            let collected = unsafe { PdhCollectQueryData(query) } == 0;
             self.query = query;
             self.counter = counter;
-            self.primed = false;
+            self.primed = collected;
         }
 
         pub fn sample(&mut self) -> Option<u8> {
@@ -514,7 +518,7 @@ mod win_perf {
             let count = (item_count as usize).min(items.len());
             let mut owned_entries: Vec<(String, f64)> = Vec::with_capacity(count);
             for item in &items[..count] {
-                if item.szName.0.is_null() {
+                if item.szName.0.is_null() || !matches!(item.FmtValue.CStatus, 0 | 1) {
                     continue;
                 }
                 let name = unsafe { wide_ptr_to_string(item.szName.0) };
@@ -629,6 +633,10 @@ mod win_perf {
                 .name("estra-fps-dxgi".into())
                 .spawn(move || {
                     crate::security::hide_sensitive_thread();
+                    unsafe {
+                        let _ =
+                            SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+                    }
                     while !stop_c.load(Ordering::Relaxed) {
                         let fg_mon = unsafe {
                             MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTOPRIMARY)
@@ -882,11 +890,12 @@ mod tests {
         let samples = [
             ("pid_100_luid_0x1_phys_0_eng_0_engtype_3D", 48.4),
             ("pid_200_luid_0x1_phys_0_eng_0_engtype_3D", 14.2),
+            ("pid_300_luid_0x2_phys_0_eng_0_engtype_3D", 22.0),
             ("pid_100_luid_0x1_phys_0_eng_1_engtype_Copy", 12.0),
             ("bad_neg", -5.0),
             ("bad_nan", f64::NAN),
         ];
-        // 3D sums to 62.6 -> rounds to 63; Copy is 12; max is 63.
+        // Adapter 0x1 3D sums to 62.6 -> rounds to 63; Adapter 0x2 3D stays separate (22); Copy is 12; max is 63.
         assert_eq!(aggregate_gpu_engine_utilization(&samples), 63);
     }
 
@@ -897,5 +906,24 @@ mod tests {
         assert_eq!(compute_perf_window_origin(area, 300, 48, 16, "top-right"), (1604, 16));
         assert_eq!(compute_perf_window_origin(area, 300, 48, 16, "bottom-left"), (16, 976));
         assert_eq!(compute_perf_window_origin(area, 300, 48, 16, "bottom-right"), (1604, 976));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn live_windows_samplers_collect_without_error() {
+        let mut cpu = win_perf::CpuSampler::new();
+        let mut gpu = win_perf::GpuSampler::new();
+        let fps = win_perf::FpsCollectorHandle::start();
+        std::thread::sleep(Duration::from_millis(450));
+        let cpu_val = cpu.sample();
+        let gpu_val = gpu.sample();
+        let fps_val = fps.take_fps(0.45);
+        assert!(cpu_val <= 100);
+        if let Some(g) = gpu_val {
+            assert!(g <= 100);
+        }
+        if let Some(f) = fps_val {
+            assert!(f <= 999);
+        }
     }
 }

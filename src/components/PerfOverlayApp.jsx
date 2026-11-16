@@ -15,24 +15,36 @@ export default function PerfOverlayApp({ desktopWindow = false }) {
     document.documentElement.classList.add('overlay-window-root');
     document.body.classList.add('overlay-window-body');
 
-    const off = window.estraWindow?.onPerfMetrics?.(payload => {
+    let lastPushAt = 0;
+
+    const applySnapshot = payload => {
       if (payload && typeof payload === 'object') {
         setMetrics(prev => ({ ...prev, ...payload }));
       }
-    });
+    };
 
-    if (window.estraWindow?.getPerfOverlaySnapshot) {
+    const pullSnapshot = () => {
+      if (!window.estraWindow?.getPerfOverlaySnapshot) return;
       void window.estraWindow
         .getPerfOverlaySnapshot()
-        .then(snap => {
-          if (snap && typeof snap === 'object') {
-            setMetrics(prev => ({ ...prev, ...snap }));
-          }
-        })
+        .then(applySnapshot)
         .catch(() => {});
-    }
+    };
+
+    const off = window.estraWindow?.onPerfMetrics?.(payload => {
+      lastPushAt = Date.now();
+      applySnapshot(payload);
+    });
+
+    pullSnapshot();
+    const fallbackTimer = window.setInterval(() => {
+      if (Date.now() - lastPushAt >= 1500) {
+        pullSnapshot();
+      }
+    }, 1000);
 
     return () => {
+      window.clearInterval(fallbackTimer);
       off?.();
     };
   }, [desktopWindow]);
