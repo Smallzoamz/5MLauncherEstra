@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
@@ -205,7 +205,8 @@ pub struct PerfOverlayManager {
     clock_settings: Arc<Mutex<ClockOverlaySettings>>,
     latest: Arc<Mutex<PerfMetricsSnapshot>>,
     latest_clock: Arc<Mutex<ClockOverlayState>>,
-    generation: Arc<AtomicU64>,
+    wake: Arc<(Mutex<()>, Condvar)>,
+    worker_running: Arc<AtomicBool>,
     currently_visible: Arc<AtomicBool>,
     clock_visible: Arc<AtomicBool>,
 }
@@ -247,24 +248,39 @@ impl PerfOverlayManager {
         let fivem_running = self.snapshot_metrics().fivem_running;
         let layout = compute_hud_layout(&perf, &clock, fivem_running);
 
-        if let Ok(mut snap) = self.latest.lock() {
+        let next_metrics = if let Ok(mut snap) = self.latest.lock() {
             snap.position = layout.perf_position.clone();
             snap.show_inline_clock = layout.perf_inline_clock;
-        }
-        if let Ok(mut csnap) = self.latest_clock.lock() {
-            csnap.position = layout.clock_position.clone();
-            csnap.visible = layout.show_clock_window;
-        }
-
-        let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        if perf.enabled || clock.enabled {
-            start_hud_worker(app.clone(), self.clone(), gen);
+            snap.clone()
         } else {
-            self.currently_visible.store(false, Ordering::SeqCst);
-            self.clock_visible.store(false, Ordering::SeqCst);
-            hide_hud_window(app, PERF_OVERLAY_LABEL);
-            hide_hud_window(app, CLOCK_OVERLAY_LABEL);
+            PerfMetricsSnapshot::default()
+        };
+
+        let next_clock = ClockOverlayState {
+            visible: layout.show_clock_window,
+            position: layout.clock_position.clone(),
+        };
+        self.set_clock_state(next_clock.clone());
+
+        let _ = app.emit_to(PERF_OVERLAY_LABEL, "estra://perf-metrics", next_metrics);
+        let _ = app.emit_to(CLOCK_OVERLAY_LABEL, "estra://clock-overlay-state", next_clock);
+        sync_hud_windows_on_main_thread(app, self);
+
+        if perf.enabled || clock.enabled {
+            if !self.worker_running.swap(true, Ordering::SeqCst) {
+                start_singleton_hud_worker(app.clone(), self.clone());
+            } else {
+                self.notify_worker();
+            }
+        } else {
+            self.notify_worker();
         }
+    }
+
+    fn notify_worker(&self) {
+        let (lock, cvar) = &*self.wake;
+        let _guard = lock.lock();
+        cvar.notify_all();
     }
 
     pub fn snapshot_settings(&self) -> PerfOverlaySettings {
@@ -311,13 +327,6 @@ impl PerfOverlayManager {
         if let Ok(mut guard) = self.latest_clock.lock() {
             *guard = state;
         }
-    }
-
-    fn is_current_generation(&self, gen: u64) -> bool {
-        if self.generation.load(Ordering::SeqCst) != gen {
-            return false;
-        }
-        self.snapshot_settings().enabled || self.snapshot_clock_settings().enabled
     }
 
     pub fn current_layout(&self) -> HudLayoutDecision {
@@ -371,12 +380,12 @@ impl PerfOverlayCaptureGuard {
         let _ = app.run_on_main_thread(move || {
             if check_perf {
                 if let Some(w) = app_clone.get_webview_window(PERF_OVERLAY_LABEL) {
-                    let _ = w.hide();
+                    win_perf::hide_hud_topmost(&w);
                 }
             }
             if check_clock {
                 if let Some(w) = app_clone.get_webview_window(CLOCK_OVERLAY_LABEL) {
-                    let _ = w.hide();
+                    win_perf::hide_hud_topmost(&w);
                 }
             }
             let _ = tx.send(());
@@ -402,34 +411,7 @@ impl Drop for PerfOverlayCaptureGuard {
         let (Some(app), Some(manager)) = (self.app.take(), self.manager.take()) else {
             return;
         };
-        let layout = manager.current_layout();
-        let restore_perf = self.hid_perf && layout.show_perf;
-        let restore_clock = self.hid_clock && layout.show_clock_window;
-        if !restore_perf && !restore_clock {
-            return;
-        }
-        let _ = app.clone().run_on_main_thread(move || {
-            if restore_perf {
-                if let Some(win) = app.get_webview_window(PERF_OVERLAY_LABEL) {
-                    win_perf::show_hud_topmost_no_activate(
-                        &win,
-                        layout.perf_width,
-                        PERF_HEIGHT,
-                        &layout.perf_position,
-                    );
-                }
-            }
-            if restore_clock {
-                if let Some(win) = app.get_webview_window(CLOCK_OVERLAY_LABEL) {
-                    win_perf::show_hud_topmost_no_activate(
-                        &win,
-                        CLOCK_WIDTH,
-                        PERF_HEIGHT,
-                        &layout.clock_position,
-                    );
-                }
-            }
-        });
+        sync_hud_windows_on_main_thread(&app, &manager);
     }
 }
 
@@ -469,8 +451,9 @@ mod win_perf {
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos,
-        GWL_EXSTYLE, HWND_TOPMOST, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SWP_NOSENDCHANGING,
-        SWP_SHOWWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+        ShowWindow, GWL_EXSTYLE, HWND_TOPMOST, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE,
+        SWP_NOSENDCHANGING, SWP_SHOWWINDOW, SW_HIDE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        WS_EX_TRANSPARENT,
     };
 
     const PDH_MORE_DATA_ERR: u32 = 0x8000_07D2;
@@ -549,6 +532,15 @@ mod win_perf {
                 SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOSENDCHANGING,
             );
         }
+    }
+
+    pub fn hide_hud_topmost(win: &WebviewWindow) {
+        if let Ok(hwnd) = win.hwnd() {
+            unsafe {
+                let _ = ShowWindow(HWND(hwnd.0), SW_HIDE);
+            }
+        }
+        let _ = win.hide();
     }
 
     pub struct CpuSampler {
@@ -905,6 +897,10 @@ mod win_perf {
         let _ = win.show();
     }
 
+    pub fn hide_hud_topmost(win: &WebviewWindow) {
+        let _ = win.hide();
+    }
+
     pub struct CpuSampler;
     impl CpuSampler {
         pub fn new() -> Self { Self }
@@ -980,17 +976,49 @@ pub fn ensure_clock_overlay_window(app: &AppHandle) -> Result<WebviewWindow, Str
     Ok(win)
 }
 
-pub fn hide_hud_window(app: &AppHandle, label: &str) {
-    let app_clone = app.clone();
-    let target = label.to_string();
+pub fn sync_hud_windows_on_main_thread(app: &AppHandle, manager: &PerfOverlayManager) {
+    let app_ui = app.clone();
+    let mgr_ui = manager.clone();
     let _ = app.run_on_main_thread(move || {
-        if let Some(win) = app_clone.get_webview_window(&target) {
-            let _ = win.hide();
+        let layout = mgr_ui.current_layout();
+
+        if layout.show_perf {
+            mgr_ui.currently_visible.store(true, Ordering::SeqCst);
+            if let Ok(win) = ensure_perf_overlay_window(&app_ui) {
+                win_perf::show_hud_topmost_no_activate(
+                    &win,
+                    layout.perf_width,
+                    PERF_HEIGHT,
+                    &layout.perf_position,
+                );
+            }
+        } else {
+            mgr_ui.currently_visible.store(false, Ordering::SeqCst);
+            if let Some(win) = app_ui.get_webview_window(PERF_OVERLAY_LABEL) {
+                win_perf::hide_hud_topmost(&win);
+            }
+        }
+
+        if layout.show_clock_window {
+            mgr_ui.clock_visible.store(true, Ordering::SeqCst);
+            if let Ok(win) = ensure_clock_overlay_window(&app_ui) {
+                win_perf::show_hud_topmost_no_activate(
+                    &win,
+                    CLOCK_WIDTH,
+                    PERF_HEIGHT,
+                    &layout.clock_position,
+                );
+            }
+        } else {
+            mgr_ui.clock_visible.store(false, Ordering::SeqCst);
+            if let Some(win) = app_ui.get_webview_window(CLOCK_OVERLAY_LABEL) {
+                win_perf::hide_hud_topmost(&win);
+            }
         }
     });
 }
 
-fn start_hud_worker(app: AppHandle, manager: PerfOverlayManager, gen: u64) {
+fn start_singleton_hud_worker(app: AppHandle, manager: PerfOverlayManager) {
     let _ = std::thread::Builder::new()
         .name("estra-hud-overlay".into())
         .spawn(move || {
@@ -1001,21 +1029,15 @@ fn start_hud_worker(app: AppHandle, manager: PerfOverlayManager, gen: u64) {
             let mut last_tick = Instant::now();
             let mut last_fivem_check = Instant::now() - Duration::from_secs(10);
             let mut cached_fivem_running = false;
-            let mut last_perf_layout: Option<(String, u32)> = None;
-            let mut last_clock_pos = String::new();
+            let mut last_applied: Option<(bool, String, u32, bool, String)> = None;
 
-            if manager.snapshot_settings().enabled {
-                cpu = Some(win_perf::CpuSampler::new());
-                gpu = Some(win_perf::GpuSampler::new());
-                fps_collector = Some(win_perf::FpsCollectorHandle::start());
-                std::thread::sleep(Duration::from_millis(350));
-            }
-
-            while manager.is_current_generation(gen) {
+            loop {
                 let perf_cfg = manager.snapshot_settings();
                 let clock_cfg = manager.snapshot_clock_settings();
-                let elapsed = last_tick.elapsed().as_secs_f64();
-                last_tick = Instant::now();
+
+                if !perf_cfg.enabled && !clock_cfg.enabled {
+                    break;
+                }
 
                 let need_fivem_check =
                     (perf_cfg.enabled && perf_cfg.only_in_game) || (clock_cfg.enabled && clock_cfg.only_in_game);
@@ -1027,8 +1049,6 @@ fn start_hud_worker(app: AppHandle, manager: PerfOverlayManager, gen: u64) {
                 } else if !need_fivem_check {
                     cached_fivem_running = false;
                 }
-
-                let layout = compute_hud_layout(&perf_cfg, &clock_cfg, cached_fivem_running);
 
                 if perf_cfg.enabled {
                     if cpu.is_none() {
@@ -1046,6 +1066,10 @@ fn start_hud_worker(app: AppHandle, manager: PerfOverlayManager, gen: u64) {
                     fps_collector = None;
                 }
 
+                let elapsed = last_tick.elapsed().as_secs_f64();
+                last_tick = Instant::now();
+
+                let layout = compute_hud_layout(&perf_cfg, &clock_cfg, cached_fivem_running);
                 let cpu_percent = cpu.as_mut().map(|c| c.sample()).unwrap_or(0);
                 let gpu_percent = gpu.as_mut().and_then(|g| g.sample());
                 let fps = fps_collector.as_ref().and_then(|f| f.take_fps(elapsed));
@@ -1071,76 +1095,39 @@ fn start_hud_worker(app: AppHandle, manager: PerfOverlayManager, gen: u64) {
                 };
                 manager.set_clock_state(clock_state.clone());
 
+                let next_key = (
+                    layout.show_perf,
+                    layout.perf_position.clone(),
+                    layout.perf_width.round() as u32,
+                    layout.show_clock_window,
+                    layout.clock_position.clone(),
+                );
+                if last_applied.as_ref() != Some(&next_key) {
+                    last_applied = Some(next_key);
+                    sync_hud_windows_on_main_thread(&app, &manager);
+                }
+
                 if layout.show_perf {
-                    let was_vis = manager.currently_visible.swap(true, Ordering::SeqCst);
-                    let width_key = layout.perf_width.round() as u32;
-                    let target_key = (layout.perf_position.clone(), width_key);
-                    let geom_changed = last_perf_layout.as_ref() != Some(&target_key);
-                    last_perf_layout = Some(target_key);
-                    if !was_vis || geom_changed {
-                        let app_ui = app.clone();
-                        let pos_ui = layout.perf_position.clone();
-                        let width_ui = layout.perf_width;
-                        let _ = app.run_on_main_thread(move || {
-                            if let Ok(win) = ensure_perf_overlay_window(&app_ui) {
-                                win_perf::show_hud_topmost_no_activate(
-                                    &win,
-                                    width_ui,
-                                    PERF_HEIGHT,
-                                    &pos_ui,
-                                );
-                            }
-                        });
-                    }
                     let _ = app.emit_to(PERF_OVERLAY_LABEL, "estra://perf-metrics", snap);
-                } else if manager.currently_visible.swap(false, Ordering::SeqCst) {
-                    last_perf_layout = None;
-                    hide_hud_window(&app, PERF_OVERLAY_LABEL);
                 }
-
                 if layout.show_clock_window {
-                    let was_vis = manager.clock_visible.swap(true, Ordering::SeqCst);
-                    let pos_changed = last_clock_pos != layout.clock_position;
-                    last_clock_pos = layout.clock_position.clone();
-                    if !was_vis || pos_changed {
-                        let app_ui = app.clone();
-                        let pos_ui = layout.clock_position.clone();
-                        let _ = app.run_on_main_thread(move || {
-                            if let Ok(win) = ensure_clock_overlay_window(&app_ui) {
-                                win_perf::show_hud_topmost_no_activate(
-                                    &win,
-                                    CLOCK_WIDTH,
-                                    PERF_HEIGHT,
-                                    &pos_ui,
-                                );
-                            }
-                        });
-                    }
                     let _ = app.emit_to(CLOCK_OVERLAY_LABEL, "estra://clock-overlay-state", clock_state);
-                } else if manager.clock_visible.swap(false, Ordering::SeqCst) {
-                    last_clock_pos.clear();
-                    hide_hud_window(&app, CLOCK_OVERLAY_LABEL);
                 }
 
-                if !perf_cfg.enabled && !clock_cfg.only_in_game {
-                    // Only standalone static clock is active; no background polling loop needed.
-                    return;
-                }
-
-                for _ in 0..10 {
-                    if !manager.is_current_generation(gen) {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(100));
+                let wait_duration = if perf_cfg.enabled || clock_cfg.only_in_game {
+                    Duration::from_millis(1000)
+                } else {
+                    // Standalone static clock without FiveM check: sleep until woken by settings change
+                    Duration::from_secs(60 * 60)
+                };
+                let (lock, cvar) = &*manager.wake;
+                if let Ok(guard) = lock.lock() {
+                    let _ = cvar.wait_timeout(guard, wait_duration);
                 }
             }
 
-            if manager.generation.load(Ordering::SeqCst) == gen {
-                manager.currently_visible.store(false, Ordering::SeqCst);
-                manager.clock_visible.store(false, Ordering::SeqCst);
-                hide_hud_window(&app, PERF_OVERLAY_LABEL);
-                hide_hud_window(&app, CLOCK_OVERLAY_LABEL);
-            }
+            manager.worker_running.store(false, Ordering::SeqCst);
+            sync_hud_windows_on_main_thread(&app, &manager);
         });
 }
 

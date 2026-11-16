@@ -54,6 +54,10 @@ export default function ClockOverlayApp({ desktopWindow = false }) {
     };
   }, [desktopWindow]);
 
+  if (desktopWindow && !state.visible) {
+    return null;
+  }
+
   const { dateText, timeText } = formatHudDateTime(now);
   const alignClass = String(state.position || '').endsWith('right') ? 'align-right' : 'align-left';
 
