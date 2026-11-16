@@ -326,6 +326,41 @@ export default function SettingsModal({ isOpen, onClose, settings, onSaveSetting
           </div>
         </div>
       </details>
+
+      <details className="configuration-panel patch-template-panel" open>
+        <summary>
+          <span>วันที่ &amp; เวลา Overlay (Date &amp; Time)</span>
+        </summary>
+        <div className="patch-template-body">
+          <label className="setting-row">
+            <span>เปิดแสดงวันที่และเวลา (Overlay)<small className="help-text">แสดงวันที่และเวลาปัจจุบันบนหน้าจอแบบคลิกทะลุ (หากเลือกมุมเดียวกับ FPS / CPU / GPU จะแสดงต่อจาก GPU อัตโนมัติ)</small></span>
+            <input type="checkbox" disabled={busy} checked={Boolean(form.clockOverlayEnabled)} onChange={e => setForm({ ...form, clockOverlayEnabled: e.target.checked })} />
+          </label>
+          <label className="setting-row">
+            <span>ให้ติดแถบวันที่และเวลาไปด้วยเมื่อกด {form.screenshotHotkey || 'F12'} แคปหน้าจอ<small className="help-text">เปิด = เห็นวันที่/เวลาในภาพแคปด้วย • ปิด = ซ่อนชั่วคราวก่อนแคป (หากวางมุมเดียวกับ Performance Overlay จะอ้างอิงสิทธิ์จากแถบ Performance)</small></span>
+            <input type="checkbox" disabled={busy || !form.clockOverlayEnabled} checked={Boolean(form.clockOverlayIncludeInScreenshots)} onChange={e => setForm({ ...form, clockOverlayIncludeInScreenshots: e.target.checked })} />
+          </label>
+          <label className="setting-row">
+            <span>แสดงเฉพาะตอนเปิด FiveM อยู่เท่านั้น<small className="help-text">หากเปิด แถบวันที่และเวลาจะแสดงเฉพาะระหว่างเปิดเกม FiveM</small></span>
+            <input type="checkbox" disabled={busy || !form.clockOverlayEnabled} checked={Boolean(form.clockOverlayOnlyInGame)} onChange={e => setForm({ ...form, clockOverlayOnlyInGame: e.target.checked })} />
+          </label>
+          <div style={{ marginTop: 10 }}>
+            <label htmlFor="clock-overlay-position">ตำแหน่งแสดงผลวันที่และเวลา</label>
+            <div className="input-container">
+              <select
+                id="clock-overlay-position"
+                disabled={busy || !form.clockOverlayEnabled}
+                value={form.clockOverlayPosition || 'top-right'}
+                onChange={e => setForm({ ...form, clockOverlayPosition: e.target.value })}
+              >
+                {PERF_OVERLAY_POSITIONS.map(pos => (
+                  <option key={pos.value} value={pos.value}>{pos.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+      </details>
       <button type="button" className="btn-action-refresh" disabled={!activeServer?.gameBuild} onClick={exportIni}>ดาวน์โหลดตัวอย่าง Game Build (.ini)</button>
       {message && <p role="status" className="notice">{message}</p>}
       <MaintenanceSettings fivemPath={form.fivemPath} onBusyChange={value => { setMaintenanceBusy(value); onMaintenanceBusy?.(value); }} onRequestConfirm={onRequestConfirm} />

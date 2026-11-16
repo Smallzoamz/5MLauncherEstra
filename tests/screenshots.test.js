@@ -11,9 +11,12 @@ import {
   shouldDeliverOverlay
 } from '../src/services/overlayService.js';
 import {
+  buildClockOverlaySettingsPayload,
   buildPerfOverlaySettingsPayload,
+  formatHudDateTime,
   formatPerfMetric,
   normalizePerfOverlayPosition,
+  syncClockOverlaySettings,
   syncPerfOverlaySettings
 } from '../src/services/perfOverlayService.js';
 import { DEFAULT_SETTINGS, getSettings, saveSettings } from '../src/services/storageService.js';
@@ -50,6 +53,7 @@ test('screenshotService normalizes hotkeys, formats bytes, and builds IPC payloa
       screenshotHotkey: 'ctrl+f11',
       screenshotOnlyInGame: true,
       perfOverlayIncludeInScreenshots: true,
+      clockOverlayIncludeInScreenshots: true,
       screenshotDir: '  D:\\EstraShots  '
     },
     '  Los Santos City  '
@@ -59,6 +63,7 @@ test('screenshotService normalizes hotkeys, formats bytes, and builds IPC payloa
     hotkey: 'Ctrl+F11',
     onlyInGame: true,
     includePerfOverlay: true,
+    includeClockOverlay: true,
     dir: 'D:\\EstraShots',
     cityName: 'Los Santos City'
   });
@@ -80,6 +85,7 @@ test('screenshotService normalizes hotkeys, formats bytes, and builds IPC payloa
       hotkey: 'F9',
       onlyInGame: false,
       includePerfOverlay: false,
+      includeClockOverlay: false,
       dir: '',
       cityName: 'Test City'
     });
@@ -176,6 +182,72 @@ test('perfOverlayService builds IPC payloads, formats metrics, and persists F12 
       onlyInGame: false,
       includeInScreenshots: false,
       position: 'bottom-right'
+    });
+  } finally {
+    if (prevWindow === undefined) delete globalThis.window;
+    else globalThis.window = prevWindow;
+  }
+});
+
+test('clock overlay builds IPC payloads, formats local date/time, and persists settings', async () => {
+  const formatted = formatHudDateTime(new Date(2026, 10, 16, 20, 5, 9));
+  assert.deepEqual(formatted, { dateText: '16/11/2026', timeText: '20:05:09' });
+
+  const payload = buildClockOverlaySettingsPayload({
+    clockOverlayEnabled: true,
+    clockOverlayOnlyInGame: false,
+    clockOverlayIncludeInScreenshots: true,
+    clockOverlayPosition: 'invalid'
+  });
+  assert.deepEqual(payload, {
+    enabled: true,
+    onlyInGame: false,
+    includeInScreenshots: true,
+    position: 'top-right'
+  });
+
+  withMockLocalStorage(() => {
+    assert.equal(DEFAULT_SETTINGS.clockOverlayEnabled, false);
+    assert.equal(DEFAULT_SETTINGS.clockOverlayPosition, 'top-right');
+    assert.equal(DEFAULT_SETTINGS.clockOverlayIncludeInScreenshots, false);
+
+    saveSettings({
+      ...DEFAULT_SETTINGS,
+      clockOverlayEnabled: true,
+      clockOverlayOnlyInGame: true,
+      clockOverlayIncludeInScreenshots: true,
+      clockOverlayPosition: 'top-left'
+    });
+
+    const loaded = getSettings();
+    assert.equal(loaded.clockOverlayEnabled, true);
+    assert.equal(loaded.clockOverlayOnlyInGame, true);
+    assert.equal(loaded.clockOverlayIncludeInScreenshots, true);
+    assert.equal(loaded.clockOverlayPosition, 'top-left');
+  });
+
+  const prevWindow = globalThis.window;
+  let sentClock = null;
+  globalThis.window = {
+    estraWindow: {
+      setClockOverlaySettings: async cfg => {
+        sentClock = cfg;
+        return cfg;
+      }
+    }
+  };
+  try {
+    await syncClockOverlaySettings({
+      clockOverlayEnabled: true,
+      clockOverlayOnlyInGame: true,
+      clockOverlayIncludeInScreenshots: true,
+      clockOverlayPosition: 'bottom-left'
+    });
+    assert.deepEqual(sentClock, {
+      enabled: true,
+      onlyInGame: true,
+      includeInScreenshots: true,
+      position: 'bottom-left'
     });
   } finally {
     if (prevWindow === undefined) delete globalThis.window;

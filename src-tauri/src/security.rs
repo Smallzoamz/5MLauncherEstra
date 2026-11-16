@@ -160,7 +160,8 @@ pub fn is_re_module_name(module_name: &str) -> bool {
 }
 
 pub fn is_allowed_webview_label(label: &str, allow_overlay: bool) -> bool {
-    label == "main" || (allow_overlay && (label == "overlay" || label == "perf-overlay"))
+    label == "main"
+        || (allow_overlay && matches!(label, "overlay" | "perf-overlay" | "clock-overlay"))
 }
 
 pub fn is_allowed_webview_url(url: &Url, is_release: bool) -> bool {

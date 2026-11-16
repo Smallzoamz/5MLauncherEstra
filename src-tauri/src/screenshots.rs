@@ -28,6 +28,8 @@ pub struct ScreenshotConfig {
     #[serde(default)]
     pub include_perf_overlay: bool,
     #[serde(default)]
+    pub include_clock_overlay: bool,
+    #[serde(default)]
     pub dir: String,
     #[serde(default)]
     pub city_name: String,
@@ -48,6 +50,7 @@ impl Default for ScreenshotConfig {
             hotkey: DEFAULT_HOTKEY.to_string(),
             only_in_game: false,
             include_perf_overlay: false,
+            include_clock_overlay: false,
             dir: String::new(),
             city_name: String::new(),
         }
@@ -800,8 +803,9 @@ pub fn capture_screenshot_now(
         .map_err(|_| "ไม่สามารถจับภาพหน้าจอซ้อนกันได้".to_string())?;
     let cfg = manager.snapshot();
     let folder = resolve_screenshots_dir(app, &cfg.dir)?;
-    let perf_guard = perf_overlay
-        .map(|m| PerfOverlayCaptureGuard::prepare(app, m, cfg.include_perf_overlay));
+    let perf_guard = perf_overlay.map(|m| {
+        PerfOverlayCaptureGuard::prepare(app, m, cfg.include_perf_overlay, cfg.include_clock_overlay)
+    });
     let capture_res = win_impl::capture_active_monitor_rgba();
     drop(perf_guard);
     let (width, height, rgba) = capture_res?;

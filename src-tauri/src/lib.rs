@@ -30,7 +30,8 @@ use crate::overlay::{
     OverlayNotificationPayload, OverlaySettings,
 };
 use crate::perf_overlay::{
-    ensure_perf_overlay_window, PerfMetricsSnapshot, PerfOverlayManager, PerfOverlaySettings,
+    ensure_clock_overlay_window, ensure_perf_overlay_window, ClockOverlaySettings,
+    ClockOverlayState, PerfMetricsSnapshot, PerfOverlayManager, PerfOverlaySettings,
 };
 use crate::presence::{get_system_presence, SystemPresence};
 use crate::screenshots::{
@@ -507,6 +508,26 @@ fn get_perf_metrics_snapshot_cmd(
     Ok(state.perf_overlay.snapshot_metrics())
 }
 
+#[tauri::command]
+fn set_clock_overlay_settings_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: ClockOverlaySettings,
+) -> Result<ClockOverlaySettings, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    state.perf_overlay.update_clock_settings(&app, settings)
+}
+
+#[tauri::command]
+fn get_clock_overlay_state_cmd(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+) -> Result<ClockOverlayState, String> {
+    crate::security::verify_ipc_caller(&webview, true)?;
+    Ok(state.perf_overlay.snapshot_clock_state())
+}
+
 pub fn run() {
     let startup_args: Vec<String> = std::env::args().collect();
     let launched_autostart = is_autostart_arg(&startup_args);
@@ -618,6 +639,7 @@ pub fn run() {
                 security::lock_webview_window(&overlay_win);
             }
             let _ = ensure_perf_overlay_window(&app.handle());
+            let _ = ensure_clock_overlay_window(&app.handle());
             let app_state = app.state::<AppState>();
             start_hotkey_listener(
                 app.handle().clone(),
@@ -664,6 +686,8 @@ pub fn run() {
             hide_overlay_window_cmd,
             set_perf_overlay_settings_cmd,
             get_perf_metrics_snapshot_cmd,
+            set_clock_overlay_settings_cmd,
+            get_clock_overlay_state_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Estra FiveM Launcher");

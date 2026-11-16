@@ -17,6 +17,8 @@ export const DEFAULT_SETTINGS = {
   overlayNotifyFriendOnline: true, overlayNotifyFriendInGame: true,
   perfOverlayEnabled: false, perfOverlayOnlyInGame: false,
   perfOverlayIncludeInScreenshots: false, perfOverlayPosition: 'top-left',
+  clockOverlayEnabled: false, clockOverlayOnlyInGame: false,
+  clockOverlayIncludeInScreenshots: false, clockOverlayPosition: 'top-right',
   githubRepo: DEFAULT_GITHUB_REPO, socialServerUrl: SUPABASE_SOCIAL_GATEWAY_URL,
   websiteUrl: 'https://estralauncher.vercel.app/',
   discordUrl: 'https://discord.gg/WYjfK6FWgB',

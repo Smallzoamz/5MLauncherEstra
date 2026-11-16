@@ -95,6 +95,18 @@ export function initDesktopBridge() {
         else unlisten();
       });
       return () => { active = false; unlistenFn?.(); };
+    },
+    setClockOverlaySettings: settings => invoke('set_clock_overlay_settings_cmd', { settings }),
+    getClockOverlayState: () => invoke('get_clock_overlay_state_cmd'),
+    onClockOverlayState: callback => {
+      if (typeof callback !== 'function') return () => {};
+      let active = true;
+      let unlistenFn = null;
+      void listen('estra://clock-overlay-state', event => { if (active) callback(event.payload); }).then(unlisten => {
+        if (active) unlistenFn = unlisten;
+        else unlisten();
+      });
+      return () => { active = false; unlistenFn?.(); };
     }
   });
 }
