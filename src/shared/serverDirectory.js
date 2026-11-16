@@ -1,4 +1,5 @@
 import { parseTarget } from './target.js';
+import { DEFAULT_SERVER_TAG, normalizeServerTag } from './serverTags.js';
 
 export const DEFAULT_SERVER_DIRECTORY = [
   {
@@ -6,7 +7,7 @@ export const DEFAULT_SERVER_DIRECTORY = [
     name: 'Noxtis Legacy',
     address: '89.38.101.136:30120',
     aliases: ['89.38.101.136:30120'],
-    tag: 'Roleplay',
+    tag: DEFAULT_SERVER_TAG,
     patchManifestUrl: '',
     customBannerUrl: '',
     sortOrder: 10
@@ -47,8 +48,7 @@ export function normalizeDirectoryEntry(raw) {
     if (normalized) aliasSet.add(normalized);
   }
 
-  const rawTag = String(raw.tag || 'Roleplay').trim();
-  const tag = ['Roleplay', 'Training', 'ไม่มี'].includes(rawTag) ? rawTag : 'Roleplay';
+  const tag = normalizeServerTag(raw.tag, DEFAULT_SERVER_TAG);
   const slug = String(raw.slug || address).trim().slice(0, 100) || address;
   const sortOrder = Number.isFinite(Number(raw.sort_order ?? raw.sortOrder))
     ? Number(raw.sort_order ?? raw.sortOrder)
@@ -99,7 +99,7 @@ export function applyDirectoryMetadataToServer(server, directory) {
   if (!matched) return { changed: false, server };
 
   const nextName = matched.name;
-  const nextTag = matched.tag || server.tag || 'Roleplay';
+  const nextTag = normalizeServerTag(matched.tag || server.tag, DEFAULT_SERVER_TAG);
   const nextPatchManifestUrl = server.patchManifestUrl || matched.patchManifestUrl || '';
   const nextCustomBannerUrl = server.customBannerUrl || matched.customBannerUrl || '';
   const nextSlug = matched.slug;

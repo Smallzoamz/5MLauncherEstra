@@ -77,3 +77,15 @@ export async function sendGameInvite(friendId, server, socialServerUrl) {
 export async function respondGameInvite(inviteId, action, socialServerUrl) {
   return apiPost('/api/social/game-invite-respond', { inviteId, action }, socialHeaders(socialServerUrl));
 }
+
+export async function fetchChatHistory(friendId, socialServerUrl) {
+  return apiPost('/api/social/chat-history', { friendId }, socialHeaders(socialServerUrl));
+}
+
+export async function sendChatMessage(friendId, body, socialServerUrl) {
+  return apiPost('/api/social/chat-send', { friendId, body }, socialHeaders(socialServerUrl));
+}
+
+export async function markChatRead(friendId, socialServerUrl) {
+  return apiPost('/api/social/chat-read', { friendId }, socialHeaders(socialServerUrl));
+}

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getSavedServers, saveServers, getSettings, getActiveServerId, hasSeenOnboardingGuide, markOnboardingGuideSeen } from '../src/services/storageService.js';
 import { lookupDirectoryServer, applyDirectoryMetadataToServer, mergeDirectoryEntries, cleanFiveMServerName, pickFetchedServerName, syncLiveServerName } from '../src/shared/serverDirectory.js';
+import { SERVER_TAGS, CATEGORY_TAGS, DEFAULT_SERVER_TAG, normalizeServerTag } from '../src/shared/serverTags.js';
 import { queryServerInfo, launchFiveM } from '../src/services/fivemService.js';
 import audioService from '../src/services/audioService.js';
 
@@ -50,8 +51,15 @@ test('server directory resolves connect commands, aliases, and syncs canonical m
   const synced = applyDirectoryMetadataToServer({ id: '1', name: 'Old Custom Name', ip: '103.10.20.30:30120', tag: 'Training', patchManifestUrl: '' }, directory);
   assert.equal(synced.changed, true);
   assert.equal(synced.server.name, 'Estra Roleplay');
-  assert.equal(synced.server.tag, 'Roleplay');
+  assert.equal(synced.server.tag, 'RP');
   assert.equal(synced.server.patchManifestUrl, 'https://cdn.example.com/manifest.json');
+  assert.deepEqual(CATEGORY_TAGS, ['RP', 'SRP', 'RP Commu', 'Commu', 'Training', 'School']);
+  assert.deepEqual(SERVER_TAGS, ['ไม่มี', 'RP', 'SRP', 'RP Commu', 'Commu', 'Training', 'School']);
+  assert.equal(DEFAULT_SERVER_TAG, 'RP');
+  assert.equal(normalizeServerTag('Roleplay'), 'RP');
+  assert.equal(normalizeServerTag('RP Commu'), 'RP Commu');
+  assert.equal(normalizeServerTag('School'), 'School');
+  assert.equal(normalizeServerTag('UnknownTag'), 'RP');
 });
 test('cleanFiveMServerName and pickFetchedServerName sanitize color tags and prefer sv_projectName', () => {
   assert.equal(cleanFiveMServerName('^1[TH]^7 ^4Estra   Roleplay^0 ~r~18+~s~'), '[TH] Estra Roleplay 18+');

@@ -3,6 +3,7 @@ import {
   Check,
   ChevronDown,
   Info,
+  MessageCircle,
   Play,
   Search,
   Send,
@@ -12,6 +13,7 @@ import {
   X
 } from 'lucide-react';
 import { UserAvatar } from './UserAvatar';
+import FriendChatPanel from './FriendChatPanel';
 
 function presenceLabel(friend) {
   if (friend.presence === 'in-game' && friend.currentServer?.name) {
@@ -36,9 +38,15 @@ export default function FriendsSidebar({
   onInviteFriend,
   onRespondInvite,
   onJoinFriendServer,
+  onFetchChatHistory,
+  onSendChatMessage,
+  realtimeAccessToken,
+  socialServerUrl,
+  chatRealtimeTick,
   onRequestConfirm
 }) {
   const [tab, setTab] = useState('friends');
+  const [activeChatFriendId, setActiveChatFriendId] = useState('');
   const [search, setSearch] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
   const [targetInput, setTargetInput] = useState('');
@@ -54,6 +62,15 @@ export default function FriendsSidebar({
   const incoming = social?.incomingRequests || [];
   const outgoing = social?.outgoingRequests || [];
   const incomingInvites = social?.incomingInvites || [];
+  const unreadMessages = social?.unreadMessages || {};
+  const totalUnreadMessages = Object.values(unreadMessages).reduce((sum, n) => sum + Number(n || 0), 0);
+  const activeChatFriend = friends.find(f => f.id === activeChatFriendId) || null;
+
+  useEffect(() => {
+    if (activeChatFriendId && !friends.some(f => f.id === activeChatFriendId)) {
+      setActiveChatFriendId('');
+    }
+  }, [activeChatFriendId, friends]);
 
   useEffect(() => {
     if (!showAddForm || !user || targetInput.trim().length < 2) {
@@ -114,16 +131,17 @@ export default function FriendsSidebar({
             role="tab"
             aria-selected={tab === 'friends'}
             className={`friends-tab${tab === 'friends' ? ' active' : ''}`}
-            onClick={() => setTab('friends')}
+            onClick={() => { setTab('friends'); setActiveChatFriendId(''); }}
           >
             Friends
+            {totalUnreadMessages > 0 && <span className="friends-badge-count">{totalUnreadMessages}</span>}
           </button>
           <button
             type="button"
             role="tab"
             aria-selected={tab === 'requests'}
             className={`friends-tab${tab === 'requests' ? ' active' : ''}`}
-            onClick={() => setTab('requests')}
+            onClick={() => { setTab('requests'); setActiveChatFriendId(''); }}
           >
             Requests
             {incoming.length > 0 && <span className="friends-badge-count">{incoming.length}</span>}
@@ -152,6 +170,29 @@ export default function FriendsSidebar({
       </div>
 
       {user ? (
+        activeChatFriend && tab === 'friends' ? (
+          <FriendChatPanel
+            user={user}
+            friend={activeChatFriend}
+            canInvite={!!activeServer?.ip && !activeChatFriend.isDemo && activeChatFriend.presence !== 'offline' && typeof onInviteFriend === 'function'}
+            unreadHint={Number(unreadMessages[activeChatFriend.id] || 0)}
+            onBack={() => setActiveChatFriendId('')}
+            onInvite={async () => {
+              setInviteNotice(null);
+              try {
+                const r = await onInviteFriend(activeChatFriend.id, activeServer);
+                setInviteNotice({ ok: r?.message || `ส่งคำชวนไปยัง ${activeChatFriend.displayName} แล้ว` });
+              } catch (err) {
+                setInviteNotice({ error: err.message });
+              }
+            }}
+            onFetchHistory={onFetchChatHistory}
+            onSendMessage={onSendChatMessage}
+            realtimeAccessToken={realtimeAccessToken}
+            socialServerUrl={socialServerUrl}
+            realtimeTick={chatRealtimeTick}
+          />
+        ) : (
         <>
           <div className="friends-search-bar">
             <label className="friends-search-input">
@@ -297,8 +338,11 @@ export default function FriendsSidebar({
                         <FriendRow
                           key={friend.id}
                           friend={friend}
+                          unreadCount={Number(unreadMessages[friend.id] || 0)}
+                          canChat={!friend.isDemo && typeof onFetchChatHistory === 'function'}
                           canInvite={!!activeServer?.ip && !friend.isDemo && friend.presence !== 'offline' && typeof onInviteFriend === 'function'}
                           activeServerName={activeServer?.name}
+                          onOpenChat={() => { setTab('friends'); setActiveChatFriendId(friend.id); }}
                           onToggleFavorite={() => onToggleFavoriteFriend(friend.id, !friend.isFavorite)}
                           onRemove={() => {
                             if (onRequestConfirm) {
@@ -353,8 +397,11 @@ export default function FriendsSidebar({
                         <FriendRow
                           key={friend.id}
                           friend={friend}
+                          unreadCount={Number(unreadMessages[friend.id] || 0)}
+                          canChat={!friend.isDemo && typeof onFetchChatHistory === 'function'}
                           canInvite={!!activeServer?.ip && !friend.isDemo && friend.presence !== 'offline' && typeof onInviteFriend === 'function'}
                           activeServerName={activeServer?.name}
+                          onOpenChat={() => { setTab('friends'); setActiveChatFriendId(friend.id); }}
                           onToggleFavorite={() => onToggleFavoriteFriend(friend.id, !friend.isFavorite)}
                           onRemove={() => {
                             if (onRequestConfirm) {
@@ -473,12 +520,13 @@ export default function FriendsSidebar({
             </button>
           </div>
         </>
+        )
       ) : null}
     </aside>
   );
 }
 
-function FriendRow({ friend, canInvite, activeServerName, onToggleFavorite, onRemove, onJoin, onInvite }) {
+function FriendRow({ friend, unreadCount = 0, canChat = false, canInvite, activeServerName, onOpenChat, onToggleFavorite, onRemove, onJoin, onInvite }) {
   return (
     <li className={`friend-row ${friend.presence}`}>
       <UserAvatar user={friend} showPresence />
@@ -490,6 +538,18 @@ function FriendRow({ friend, canInvite, activeServerName, onToggleFavorite, onRe
         <small title={presenceLabel(friend)}>{presenceLabel(friend)}</small>
       </div>
       <div className="friend-row-actions">
+        {canChat && (
+          <button
+            type="button"
+            className={`friend-chat-btn${unreadCount > 0 ? ' has-unread' : ''}`}
+            title={unreadCount > 0 ? `ข้อความใหม่ ${unreadCount} ข้อความจาก ${friend.displayName}` : `แชทกับ ${friend.displayName}`}
+            aria-label={`แชทกับ ${friend.displayName}`}
+            onClick={onOpenChat}
+          >
+            <MessageCircle size={12} />
+            {unreadCount > 0 && <span className="friend-chat-dot">{unreadCount > 9 ? '9+' : unreadCount}</span>}
+          </button>
+        )}
         {friend.presence === 'in-game' && friend.currentServer?.ip && (
           <button
             type="button"

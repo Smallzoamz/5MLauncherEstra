@@ -8,9 +8,11 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Mutex as StdMutex, OnceLock};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::{Mutex as AsyncMutex, Notify};
 use winreg::enums::HKEY_CURRENT_USER;
 use winreg::RegKey;
 
@@ -324,16 +326,345 @@ pub fn discord_profile_from_json(user: &Value) -> Result<AccountUser, String> {
     })
 }
 
-async fn read_discord_pipe(pipe_path: &str, timeout: Duration) -> Result<AccountUser, String> {
+const DISCORD_HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(7000);
+
+#[derive(Debug, Clone, Default)]
+struct DiscordWorkerSnapshot {
+    user: Option<AccountUser>,
+    connecting: bool,
+    error: Option<String>,
+    worker_running: bool,
+    generation: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PipeProbeError {
+    NotFound,
+    Busy,
+    AccessDenied,
+    Transient(String),
+    Fatal(String),
+}
+
+fn discord_rpc_mutex() -> &'static AsyncMutex<()> {
+    static LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| AsyncMutex::new(()))
+}
+
+fn discord_worker_snapshot() -> &'static StdMutex<DiscordWorkerSnapshot> {
+    static SNAPSHOT: OnceLock<StdMutex<DiscordWorkerSnapshot>> = OnceLock::new();
+    SNAPSHOT.get_or_init(|| StdMutex::new(DiscordWorkerSnapshot::default()))
+}
+
+fn is_worker_cancelled(gen_id: u64) -> bool {
+    match discord_worker_snapshot().lock() {
+        Ok(guard) => !guard.worker_running || guard.generation != gen_id,
+        Err(_) => true,
+    }
+}
+
+fn discord_worker_wake() -> &'static Notify {
+    static NOTIFY: OnceLock<Notify> = OnceLock::new();
+    NOTIFY.get_or_init(Notify::new)
+}
+
+fn discord_worker_ready_notify() -> &'static Notify {
+    static READY: OnceLock<Notify> = OnceLock::new();
+    READY.get_or_init(Notify::new)
+}
+
+fn last_discord_pipe_idx() -> &'static AtomicU8 {
+    static LAST: OnceLock<AtomicU8> = OnceLock::new();
+    LAST.get_or_init(|| AtomicU8::new(0))
+}
+
+fn ordered_pipe_indices(preferred: u8) -> Vec<u8> {
+    let mut order = Vec::with_capacity(10);
+    if preferred < 10 {
+        order.push(preferred);
+    }
+    for i in 0u8..10 {
+        if i != preferred {
+            order.push(i);
+        }
+    }
+    order
+}
+
+fn stop_discord_worker() {
+    if let Ok(mut guard) = discord_worker_snapshot().lock() {
+        guard.generation = guard.generation.wrapping_add(1);
+        guard.user = None;
+        guard.connecting = false;
+        guard.error = None;
+        guard.worker_running = false;
+    }
+    discord_worker_wake().notify_waiters();
+}
+
+#[cfg(windows)]
+async fn maintain_single_discord_pipe(
+    pipe_path: &str,
+    pipe_idx: u8,
+    handshake_timeout: Duration,
+    gen_id: u64,
+) -> Result<(), PipeProbeError> {
+    use std::io::ErrorKind;
+    use tokio::net::windows::named_pipe::ClientOptions;
+
+    let mut client = ClientOptions::new().open(pipe_path).map_err(|err| {
+        let raw = err.raw_os_error();
+        if err.kind() == ErrorKind::NotFound || raw == Some(2) {
+            PipeProbeError::NotFound
+        } else if raw == Some(231) {
+            PipeProbeError::Busy
+        } else if err.kind() == ErrorKind::PermissionDenied || raw == Some(5) {
+            PipeProbeError::AccessDenied
+        } else {
+            PipeProbeError::Transient("connect failed".to_string())
+        }
+    })?;
+
+    let handshake =
+        serde_json::json!({ "v": 1, "client_id": discord_application_id() }).to_string();
+    let mut frame = Vec::with_capacity(8 + handshake.len());
+    frame.extend_from_slice(&0u32.to_le_bytes());
+    frame.extend_from_slice(&(handshake.len() as u32).to_le_bytes());
+    frame.extend_from_slice(handshake.as_bytes());
+    client
+        .write_all(&frame)
+        .await
+        .map_err(|_| PipeProbeError::Transient("write failed".to_string()))?;
+
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 4096];
+    let mut authenticated = false;
+
+    loop {
+        if is_worker_cancelled(gen_id) {
+            return Ok(());
+        }
+
+        let n = if authenticated {
+            tokio::select! {
+                _ = discord_worker_wake().notified() => {
+                    if is_worker_cancelled(gen_id) { return Ok(()); }
+                    continue;
+                }
+                res = client.read(&mut tmp) => res.map_err(|_| PipeProbeError::Transient("Discord disconnected".into()))?,
+            }
+        } else {
+            tokio::select! {
+                _ = discord_worker_wake().notified() => {
+                    if is_worker_cancelled(gen_id) { return Ok(()); }
+                    continue;
+                }
+                res = tokio::time::timeout(handshake_timeout, client.read(&mut tmp)) => {
+                    res.map_err(|_| PipeProbeError::Transient("Discord RPC timed out".into()))?
+                        .map_err(|_| PipeProbeError::Transient("Discord disconnected".into()))?
+                }
+            }
+        };
+
+        if n == 0 {
+            return Err(PipeProbeError::Transient("Discord disconnected".into()));
+        }
+        buf.extend_from_slice(&tmp[..n]);
+        if buf.len() > 262_144 {
+            return Err(PipeProbeError::Fatal("Discord RPC frame too large".into()));
+        }
+
+        while buf.len() >= 8 {
+            let opcode = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+            let len = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]) as usize;
+            if len > 262_136 {
+                return Err(PipeProbeError::Fatal("Discord RPC frame too large".into()));
+            }
+            if buf.len() < 8 + len {
+                break;
+            }
+            let payload = buf[8..8 + len].to_vec();
+            buf.drain(..8 + len);
+
+            if opcode == 3 {
+                let mut pong = Vec::with_capacity(8 + payload.len());
+                pong.extend_from_slice(&4u32.to_le_bytes());
+                pong.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+                pong.extend_from_slice(&payload);
+                if client.write_all(&pong).await.is_err() {
+                    return Err(PipeProbeError::Transient("Discord disconnected".into()));
+                }
+                continue;
+            }
+
+            let msg: Value = serde_json::from_slice(&payload)
+                .map_err(|_| PipeProbeError::Fatal("ข้อมูลโปรไฟล์ Discord ไม่ถูกต้อง".to_string()))?;
+            if opcode == 2 || msg.get("evt").and_then(|v| v.as_str()) == Some("ERROR") {
+                return Err(PipeProbeError::Fatal(
+                    "Discord ไม่อนุญาตการอ่านโปรไฟล์ผ่าน RPC".into(),
+                ));
+            }
+            if opcode == 1 && msg.get("evt").and_then(|v| v.as_str()) == Some("READY") {
+                let user_val = msg
+                    .get("data")
+                    .and_then(|d| d.get("user"))
+                    .unwrap_or(&Value::Null);
+                let account =
+                    discord_profile_from_json(user_val).map_err(PipeProbeError::Fatal)?;
+                authenticated = true;
+                last_discord_pipe_idx().store(pipe_idx, Ordering::Relaxed);
+                if let Ok(mut guard) = discord_worker_snapshot().lock() {
+                    if guard.worker_running && guard.generation == gen_id {
+                        guard.user = Some(account);
+                        guard.connecting = false;
+                        guard.error = None;
+                    }
+                }
+                discord_worker_ready_notify().notify_waiters();
+            }
+        }
+    }
+}
+
+async fn run_discord_worker(gen_id: u64) {
+    while !is_worker_cancelled(gen_id) {
+        if let Ok(mut guard) = discord_worker_snapshot().lock() {
+            if guard.worker_running && guard.generation == gen_id && guard.user.is_none() {
+                guard.connecting = true;
+            }
+        }
+
+        let preferred = last_discord_pipe_idx().load(Ordering::Relaxed);
+        let mut saw_access_denied = false;
+        let mut fatal_msg: Option<String> = None;
+
+        'pipes: for i in ordered_pipe_indices(preferred) {
+            if is_worker_cancelled(gen_id) {
+                break 'pipes;
+            }
+            let pipe = format!(r"\\?\pipe\discord-ipc-{i}");
+            for attempt in 0u8..4 {
+                if is_worker_cancelled(gen_id) {
+                    break 'pipes;
+                }
+                #[cfg(windows)]
+                let outcome = maintain_single_discord_pipe(
+                    &pipe,
+                    i,
+                    DISCORD_HANDSHAKE_TIMEOUT,
+                    gen_id,
+                )
+                .await;
+                #[cfg(not(windows))]
+                let outcome: Result<(), PipeProbeError> =
+                    Err(PipeProbeError::Fatal("Discord pipe supported on Windows only".into()));
+
+                match outcome {
+                    Ok(()) => break 'pipes,
+                    Err(PipeProbeError::NotFound) => break,
+                    Err(PipeProbeError::AccessDenied) => {
+                        saw_access_denied = true;
+                        break;
+                    }
+                    Err(PipeProbeError::Busy) => {
+                        if attempt < 3 {
+                            tokio::select! {
+                                _ = discord_worker_wake().notified() => {
+                                    if is_worker_cancelled(gen_id) { break 'pipes; }
+                                }
+                                _ = tokio::time::sleep(Duration::from_millis(80 * (attempt as u64 + 1))) => {}
+                            }
+                        }
+                    }
+                    Err(PipeProbeError::Transient(_)) => break,
+                    Err(PipeProbeError::Fatal(msg)) => {
+                        fatal_msg = Some(msg);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if is_worker_cancelled(gen_id) {
+            break;
+        }
+
+        let err_msg = if let Some(msg) = fatal_msg {
+            msg
+        } else if saw_access_denied {
+            "Discord เปิดด้วยสิทธิ์ Administrator — กรุณาเปิด Estra หรือ Discord ในระดับสิทธิ์เดียวกัน".into()
+        } else {
+            "เปิด Discord แล้ว แต่ยังอ่านบัญชีผ่าน RPC ไม่ได้".into()
+        };
+
+        if let Ok(mut guard) = discord_worker_snapshot().lock() {
+            if guard.worker_running && guard.generation == gen_id {
+                guard.user = None;
+                guard.connecting = false;
+                guard.error = Some(err_msg);
+            }
+        }
+        discord_worker_ready_notify().notify_waiters();
+
+        tokio::select! {
+            _ = discord_worker_wake().notified() => {
+                if is_worker_cancelled(gen_id) { break; }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(1800)) => {}
+        }
+    }
+
+    if let Ok(mut guard) = discord_worker_snapshot().lock() {
+        if guard.generation == gen_id {
+            guard.worker_running = false;
+            guard.connecting = false;
+        }
+    }
+}
+
+fn ensure_discord_worker_started() {
+    let spawn_gen = match discord_worker_snapshot().lock() {
+        Ok(mut guard) => {
+            if guard.worker_running {
+                None
+            } else {
+                guard.generation = guard.generation.wrapping_add(1);
+                guard.worker_running = true;
+                if guard.user.is_none() {
+                    guard.connecting = true;
+                    guard.error = None;
+                }
+                Some(guard.generation)
+            }
+        }
+        Err(_) => None,
+    };
+    if let Some(gen_id) = spawn_gen {
+        tokio::spawn(run_discord_worker(gen_id));
+    }
+}
+
+async fn read_discord_pipe_once(pipe_path: &str, timeout: Duration) -> Result<AccountUser, PipeProbeError> {
     #[cfg(windows)]
     {
+        use std::io::ErrorKind;
         use tokio::net::windows::named_pipe::ClientOptions;
 
-        tokio::time::timeout(timeout, async {
-            let mut client = ClientOptions::new()
-                .open(pipe_path)
-                .map_err(|_| "connect failed".to_string())?;
-            let handshake = serde_json::json!({ "v": 1, "client_id": discord_application_id() }).to_string();
+        match tokio::time::timeout(timeout, async {
+            let mut client = ClientOptions::new().open(pipe_path).map_err(|err| {
+                let raw = err.raw_os_error();
+                if err.kind() == ErrorKind::NotFound || raw == Some(2) {
+                    PipeProbeError::NotFound
+                } else if raw == Some(231) {
+                    PipeProbeError::Busy
+                } else if err.kind() == ErrorKind::PermissionDenied || raw == Some(5) {
+                    PipeProbeError::AccessDenied
+                } else {
+                    PipeProbeError::Transient("connect failed".to_string())
+                }
+            })?;
+            let handshake =
+                serde_json::json!({ "v": 1, "client_id": discord_application_id() }).to_string();
             let mut frame = Vec::with_capacity(8 + handshake.len());
             frame.extend_from_slice(&0u32.to_le_bytes());
             frame.extend_from_slice(&(handshake.len() as u32).to_le_bytes());
@@ -341,7 +672,7 @@ async fn read_discord_pipe(pipe_path: &str, timeout: Duration) -> Result<Account
             client
                 .write_all(&frame)
                 .await
-                .map_err(|_| "write failed".to_string())?;
+                .map_err(|_| PipeProbeError::Transient("write failed".to_string()))?;
 
             let mut buf = Vec::new();
             let mut tmp = [0u8; 4096];
@@ -349,19 +680,19 @@ async fn read_discord_pipe(pipe_path: &str, timeout: Duration) -> Result<Account
                 let n = client
                     .read(&mut tmp)
                     .await
-                    .map_err(|_| "Discord disconnected".to_string())?;
+                    .map_err(|_| PipeProbeError::Transient("Discord disconnected".to_string()))?;
                 if n == 0 {
-                    return Err("Discord disconnected".into());
+                    return Err(PipeProbeError::Transient("Discord disconnected".into()));
                 }
                 buf.extend_from_slice(&tmp[..n]);
                 if buf.len() > 262_144 {
-                    return Err("Discord RPC frame too large".into());
+                    return Err(PipeProbeError::Fatal("Discord RPC frame too large".into()));
                 }
                 while buf.len() >= 8 {
                     let opcode = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
                     let len = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]) as usize;
                     if len > 262_136 {
-                        return Err("Discord RPC frame too large".into());
+                        return Err(PipeProbeError::Fatal("Discord RPC frame too large".into()));
                     }
                     if buf.len() < 8 + len {
                         break;
@@ -377,42 +708,78 @@ async fn read_discord_pipe(pipe_path: &str, timeout: Duration) -> Result<Account
                         continue;
                     }
                     let msg: Value = serde_json::from_slice(&payload)
-                        .map_err(|_| "ข้อมูลโปรไฟล์ Discord ไม่ถูกต้อง".to_string())?;
+                        .map_err(|_| PipeProbeError::Fatal("ข้อมูลโปรไฟล์ Discord ไม่ถูกต้อง".to_string()))?;
                     if opcode == 2 || msg.get("evt").and_then(|v| v.as_str()) == Some("ERROR") {
-                        return Err("Discord ไม่อนุญาตการอ่านโปรไฟล์ผ่าน RPC".into());
+                        return Err(PipeProbeError::Fatal(
+                            "Discord ไม่อนุญาตการอ่านโปรไฟล์ผ่าน RPC".into(),
+                        ));
                     }
                     if opcode == 1 && msg.get("evt").and_then(|v| v.as_str()) == Some("READY") {
                         let user = msg
                             .get("data")
                             .and_then(|d| d.get("user"))
                             .unwrap_or(&Value::Null);
-                        return discord_profile_from_json(user);
+                        return discord_profile_from_json(user).map_err(PipeProbeError::Fatal);
                     }
                 }
             }
         })
         .await
-        .map_err(|_| "Discord RPC timed out".to_string())?
+        {
+            Ok(inner) => inner,
+            Err(_) => Err(PipeProbeError::Transient("Discord RPC timed out".into())),
+        }
     }
     #[cfg(not(windows))]
     {
         let _ = (pipe_path, timeout);
-        Err("Discord pipe supported on Windows only".into())
+        Err(PipeProbeError::Fatal("Discord pipe supported on Windows only".into()))
     }
 }
 
 pub async fn get_discord_profile() -> Result<AccountUser, String> {
-    let deadline = Instant::now() + Duration::from_millis(2500);
-    for i in 0..10 {
-        let now = Instant::now();
-        if now >= deadline {
-            break;
+    if let Ok(guard) = discord_worker_snapshot().lock() {
+        if let Some(u) = &guard.user {
+            return Ok(u.clone());
         }
-        let remaining = (deadline - now).min(Duration::from_millis(1200));
+    }
+    let _guard = discord_rpc_mutex().lock().await;
+    let preferred = last_discord_pipe_idx().load(Ordering::Relaxed);
+    let mut saw_access_denied = false;
+    let mut fatal_msg: Option<String> = None;
+
+    for i in ordered_pipe_indices(preferred) {
         let pipe = format!(r"\\?\pipe\discord-ipc-{i}");
-        if let Ok(user) = read_discord_pipe(&pipe, remaining).await {
-            return Ok(user);
+        for attempt in 0u8..3 {
+            match read_discord_pipe_once(&pipe, DISCORD_HANDSHAKE_TIMEOUT).await {
+                Ok(user) => {
+                    last_discord_pipe_idx().store(i, Ordering::Relaxed);
+                    return Ok(user);
+                }
+                Err(PipeProbeError::NotFound) => break,
+                Err(PipeProbeError::AccessDenied) => {
+                    saw_access_denied = true;
+                    break;
+                }
+                Err(PipeProbeError::Busy) => {
+                    if attempt < 2 {
+                        tokio::time::sleep(Duration::from_millis(80 * (attempt as u64 + 1))).await;
+                    }
+                }
+                Err(PipeProbeError::Transient(_)) => break,
+                Err(PipeProbeError::Fatal(msg)) => {
+                    fatal_msg = Some(msg);
+                    break;
+                }
+            }
         }
+    }
+
+    if let Some(msg) = fatal_msg {
+        return Err(msg);
+    }
+    if saw_access_denied {
+        return Err("Discord เปิดด้วยสิทธิ์ Administrator — กรุณาเปิด Estra หรือ Discord ในระดับสิทธิ์เดียวกัน".into());
     }
     Err("เปิด Discord แล้ว แต่ยังอ่านบัญชีผ่าน RPC ไม่ได้".into())
 }
@@ -484,11 +851,34 @@ pub async fn get_system_presence() -> SystemPresence {
     };
     let discord_fut = async {
         if !discord_running {
+            stop_discord_worker();
             return (None, None);
         }
-        match get_discord_profile().await {
-            Ok(u) => (Some(u), None),
-            Err(e) => (None, Some(e)),
+        ensure_discord_worker_started();
+
+        let already_ready = discord_worker_snapshot()
+            .lock()
+            .ok()
+            .and_then(|g| g.user.clone());
+        if already_ready.is_none() {
+            let _ = tokio::time::timeout(
+                Duration::from_millis(250),
+                discord_worker_ready_notify().notified(),
+            )
+            .await;
+        }
+
+        match discord_worker_snapshot().lock() {
+            Ok(guard) => {
+                if let Some(u) = &guard.user {
+                    (Some(u.clone()), None)
+                } else if guard.connecting && guard.error.is_none() {
+                    (None, Some("กำลังเชื่อมต่อบัญชี Discord RPC...".into()))
+                } else {
+                    (None, guard.error.clone())
+                }
+            }
+            Err(_) => (None, Some("เปิด Discord แล้ว แต่ยังอ่านบัญชีผ่าน RPC ไม่ได้".into())),
         }
     };
 
@@ -571,5 +961,28 @@ mod tests {
             profile.avatar_url.unwrap(),
             "https://cdn.discordapp.com/avatars/123456789012345678/0123456789abcdef0123456789abcdef.png?size=128"
         );
+    }
+
+    #[test]
+    fn discord_pipe_ordering_and_snapshot_clear_respects_closed_state() {
+        assert_eq!(ordered_pipe_indices(3), vec![3, 0, 1, 2, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(ordered_pipe_indices(0), vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+        let sample = AccountUser {
+            id: "123456789012345678".into(),
+            display_name: "Estra".into(),
+            username: Some("estra".into()),
+            avatar_url: None,
+            source: "Discord RPC".into(),
+        };
+        if let Ok(mut guard) = discord_worker_snapshot().lock() {
+            guard.user = Some(sample);
+            guard.connecting = false;
+            guard.worker_running = true;
+        }
+        stop_discord_worker();
+        let cleared = discord_worker_snapshot().lock().unwrap().clone();
+        assert!(cleared.user.is_none());
+        assert!(!cleared.worker_running);
     }
 }

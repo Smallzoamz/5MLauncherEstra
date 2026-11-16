@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { getSteamProfile, discordProfile, readDiscordPipe, DISCORD_APPLICATION_ID } from '../src/server/accountProfiles.js';
+import { getSteamProfile, discordProfile, readDiscordPipe, getDiscordProfile, clearDiscordProfileCache, DISCORD_APPLICATION_ID } from '../src/server/accountProfiles.js';
 import { getSystemPresence } from '../src/server/systemPresence.js';
 const id = '76561199557563759';
 test('Steam chooses only ActiveUser, loads matching avatar and drops account switches', async () => {
@@ -44,4 +44,33 @@ test('profile errors do not change process status; closed apps never return a ca
   assert.equal(p.steam.running, true); assert.equal(p.steam.user, null); assert.equal(p.discord.user.displayName, 'Current');
   const q = await getSystemPresence(async () => ['explorer.exe'], { steam: async () => { throw Error('must not call'); }, discord: async () => { throw Error('must not call'); } });
   assert.equal(q.steam.running, false); assert.equal(q.discord.user, null);
+});
+test('getDiscordProfile retries busy pipes, detects admin elevation mismatch, and never caches closed state', async () => {
+  clearDiscordProfileCache();
+  let busyAttempts = 0;
+  const user = await getDiscordProfile({
+    delayMs: 0,
+    readPipe: async pipe => {
+      if (pipe.endsWith('discord-ipc-0')) {
+        busyAttempts++;
+        if (busyAttempts < 3) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+        return { id: '956866340474478642', displayName: 'RetriedUser' };
+      }
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    }
+  });
+  assert.equal(user.displayName, 'RetriedUser');
+  assert.equal(busyAttempts, 3);
+
+  await assert.rejects(
+    getDiscordProfile({
+      delayMs: 0,
+      readPipe: async pipe => {
+        if (pipe.endsWith('discord-ipc-0')) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      }
+    }),
+    /Administrator/
+  );
+  clearDiscordProfileCache();
 });

@@ -1,6 +1,7 @@
 import { bannerImageUrl } from '../shared/serverMedia.js';
 import { DEFAULT_GITHUB_REPO, normalizePatchManifestUrl } from '../shared/patcherConfig.js';
 import { SUPABASE_SOCIAL_GATEWAY_URL } from '../shared/supabaseConfig.js';
+import { DEFAULT_SERVER_TAG, normalizeServerTag } from '../shared/serverTags.js';
 // Browser-local favorites/preferences only; never trusted as live status.
 const STORAGE_KEY_SERVERS = 'fivem_launcher_servers_v3';
 const STORAGE_KEY_ACTIVE_ID = 'fivem_launcher_active_server_id_v3';
@@ -20,7 +21,7 @@ export const DEFAULT_SETTINGS = {
   facebookUrl: 'https://www.facebook.com/estralauncher'
 };
 export const DEFAULT_SERVERS = [];
-function resetLive(s) { return { ...s, favorite: !!s.favorite, directorySlug: typeof s.directorySlug === 'string' ? s.directorySlug : '', lastFetchedName: typeof s.lastFetchedName === 'string' ? s.lastFetchedName : '', customBannerUrl: bannerImageUrl(s.customBannerUrl), bannerUrl: bannerImageUrl(s.bannerUrl), connectingBannerUrl: bannerImageUrl(s.connectingBannerUrl), patchManifestUrl: normalizePatchManifestUrl(s.patchManifestUrl) || '', logoUrl: s.iconSource === 'server-icon-v1' && typeof s.logoUrl === 'string' && s.logoUrl.startsWith('data:image/png;base64,') ? s.logoUrl : null, iconSource: s.iconSource === 'server-icon-v1' ? s.iconSource : null, status: 'Unknown', onlinePlayers: null, maxPlayers: null, ping: null, gameBuild: null, lockPure: null, queryError: null }; }
+function resetLive(s) { return { ...s, tag: normalizeServerTag(s.tag, DEFAULT_SERVER_TAG), favorite: !!s.favorite, directorySlug: typeof s.directorySlug === 'string' ? s.directorySlug : '', lastFetchedName: typeof s.lastFetchedName === 'string' ? s.lastFetchedName : '', customBannerUrl: bannerImageUrl(s.customBannerUrl), bannerUrl: bannerImageUrl(s.bannerUrl), connectingBannerUrl: bannerImageUrl(s.connectingBannerUrl), patchManifestUrl: normalizePatchManifestUrl(s.patchManifestUrl) || '', logoUrl: s.iconSource === 'server-icon-v1' && typeof s.logoUrl === 'string' && s.logoUrl.startsWith('data:image/png;base64,') ? s.logoUrl : null, iconSource: s.iconSource === 'server-icon-v1' ? s.iconSource : null, status: 'Unknown', onlinePlayers: null, maxPlayers: null, ping: null, gameBuild: null, lockPure: null, queryError: null }; }
 function isUntouchedFactoryDefaultServer(list) {
   if (!Array.isArray(list) || list.length !== 1) return false;
   const item = list[0];

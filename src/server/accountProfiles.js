@@ -95,11 +95,85 @@ export function readDiscordPipe(pipe, { connect = net.createConnection, timeout 
     });
   });
 }
-export async function getDiscordProfile() {
-  const deadline = Date.now() + 2500;
-  for (let i = 0; i < 10 && Date.now() < deadline; i++) {
-    try { return await readDiscordPipe(`\\\\?\\pipe\\discord-ipc-${i}`, { timeout: Math.min(1200, deadline - Date.now()) }); }
-    catch { /* Try another installed Discord channel, with a total deadline. */ }
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+let lastDiscordPipeIndex = 0;
+let discordProfileCache = null; // { user, verifiedAt }
+let inFlightDiscordRead = null;
+
+export function clearDiscordProfileCache() {
+  discordProfileCache = null;
+}
+
+export function getCachedDiscordProfile(maxAgeMs = 20_000, now = Date.now()) {
+  if (!discordProfileCache) return null;
+  if (now - discordProfileCache.verifiedAt <= maxAgeMs) return discordProfileCache.user;
+  return null;
+}
+
+function orderedDiscordPipes(preferred = lastDiscordPipeIndex) {
+  const order = [];
+  if (Number.isInteger(preferred) && preferred >= 0 && preferred < 10) order.push(preferred);
+  for (let i = 0; i < 10; i++) {
+    if (i !== preferred) order.push(i);
+  }
+  return order;
+}
+
+export async function getDiscordProfile(deps = {}) {
+  const readPipe = deps.readPipe || readDiscordPipe;
+  if (deps.readPipe || deps.bypassLock) {
+    return probeDiscordPipes(readPipe, deps.delayMs);
+  }
+  if (!inFlightDiscordRead) {
+    inFlightDiscordRead = probeDiscordPipes(readPipe, deps.delayMs).finally(() => {
+      inFlightDiscordRead = null;
+    });
+  }
+  return inFlightDiscordRead;
+}
+
+async function probeDiscordPipes(readPipe, delayScale = 1) {
+  const deadline = Date.now() + 9000;
+  let sawAccessDenied = false;
+  let fatalMessage = '';
+
+  for (const i of orderedDiscordPipes()) {
+    const pipe = `\\\\?\\pipe\\discord-ipc-${i}`;
+    for (let attempt = 0; attempt < 4 && Date.now() < deadline; attempt++) {
+      try {
+        const user = await readPipe(pipe, { timeout: Math.min(7000, deadline - Date.now()) });
+        lastDiscordPipeIndex = i;
+        discordProfileCache = { user, verifiedAt: Date.now() };
+        return user;
+      } catch (err) {
+        const code = err?.code || '';
+        const msg = String(err?.message || '');
+        if (code === 'ENOENT') break;
+        if (code === 'EACCES' || code === 'EPERM') {
+          sawAccessDenied = true;
+          break;
+        }
+        if (msg.includes('ไม่อนุญาต') || msg.includes('ไม่ถูกต้อง') || msg.includes('too large')) {
+          fatalMessage = msg;
+          break;
+        }
+        const isBusy = code === 'EBUSY' || msg.includes('EBUSY');
+        if (isBusy && attempt < 3) {
+          await sleep(Math.round(65 * (attempt + 1) * (delayScale ?? 1)));
+          continue;
+        }
+        if (attempt === 0 && (msg.includes('disconnected') || msg.includes('timed out'))) {
+          await sleep(Math.round(100 * (delayScale ?? 1)));
+          continue;
+        }
+        break;
+      }
+    }
+  }
+
+  if (fatalMessage) throw new Error(fatalMessage);
+  if (sawAccessDenied) {
+    throw new Error('Discord เปิดด้วยสิทธิ์ Administrator — กรุณาเปิด Estra หรือ Discord ในระดับสิทธิ์เดียวกัน');
   }
   throw new Error('เปิด Discord แล้ว แต่ยังอ่านบัญชีผ่าน RPC ไม่ได้');
 }

@@ -1,6 +1,11 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { getSteamProfile, getDiscordProfile } from './accountProfiles.js';
+import {
+  getSteamProfile,
+  getDiscordProfile,
+  getCachedDiscordProfile,
+  clearDiscordProfileCache
+} from './accountProfiles.js';
 const run = promisify(execFile);
 export async function getProcessNames() {
   if (process.platform !== 'win32') throw new Error('การตรวจโปรแกรมรองรับ Windows เท่านั้น');
@@ -27,11 +32,22 @@ export async function getSystemPresence(readNames = getProcessNames, profiles = 
       checkedAt: new Date().toISOString()
     };
     // Unit callers can supply profile readers; process-only fixtures do no IO.
+    if (!presence.discord.running) clearDiscordProfileCache();
     const readers = { steam: profiles.steam || (readNames === getProcessNames ? getSteamProfile : null), discord: profiles.discord || (readNames === getProcessNames ? getDiscordProfile : null) };
     await Promise.all(['steam', 'discord'].map(async key => {
       if (!presence[key].running || !readers[key]) return;
+      if (key === 'discord' && !profiles.discord) {
+        const fresh = getCachedDiscordProfile(20_000);
+        if (fresh) { presence.discord.user = fresh; return; }
+      }
       try { presence[key].user = await readers[key](); }
-      catch (error) { presence[key].profileError = error.message; }
+      catch (error) {
+        if (key === 'discord' && !profiles.discord && !String(error.message || '').includes('Administrator') && !String(error.message || '').includes('ไม่อนุญาต')) {
+          const grace = getCachedDiscordProfile(60_000);
+          if (grace) { presence.discord.user = grace; return; }
+        }
+        presence[key].profileError = error.message;
+      }
     }));
     return presence;
   } catch (error) {

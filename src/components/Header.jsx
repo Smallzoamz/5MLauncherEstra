@@ -242,7 +242,7 @@ function Account({ type, value }) {
             (value.running == null
               ? 'ยังตรวจสอบไม่ได้'
               : value.running
-                ? 'เปิดอยู่ · อ่านบัญชีไม่ได้'
+                ? (value.profileError?.includes('กำลังเชื่อม') ? 'เปิดอยู่ · กำลังเชื่อม...' : 'เปิดอยู่ · อ่านบัญชีไม่ได้')
                 : 'ไม่ได้เปิด')}
         </small>
       </span>

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { DatabaseZap, Globe, Info, Loader2, AlertTriangle } from 'lucide-react';
 import { parseTarget } from '../shared/target';
 import { lookupDirectoryServer, pickFetchedServerName } from '../shared/serverDirectory';
+import { CATEGORY_TAGS, DEFAULT_SERVER_TAG, normalizeServerTag } from '../shared/serverTags';
 import { queryServerInfo } from '../services/fivemService';
 
 function parseTargetSafe(raw) {
@@ -21,7 +22,7 @@ function canAutoLookupTarget(parsed) {
 export default function NewServerModal({ isOpen, onClose, onAddServer, directory = [] }) {
   const [name, setName] = useState('');
   const [ip, setIp] = useState('');
-  const [tag, setTag] = useState('Roleplay');
+  const [tag, setTag] = useState(DEFAULT_SERVER_TAG);
   const [manualNameEdited, setManualNameEdited] = useState(false);
   const [lookingUp, setLookingUp] = useState(false);
   const [lookupHint, setLookupHint] = useState(null); // { tone: 'matched'|'info'|'warn', address: string, text: string }
@@ -44,7 +45,7 @@ export default function NewServerModal({ isOpen, onClose, onAddServer, directory
     if (isOpen) {
       setName('');
       setIp('');
-      setTag('Roleplay');
+      setTag(DEFAULT_SERVER_TAG);
       setManualNameEdited(false);
       manualNameEditedRef.current = false;
       currentAddressRef.current = '';
@@ -175,7 +176,7 @@ export default function NewServerModal({ isOpen, onClose, onAddServer, directory
     const matched = lookupDirectoryServer(nextIp, directory);
     if (matched) {
       setName(matched.name);
-      setTag(matched.tag || 'Roleplay');
+      setTag(normalizeServerTag(matched.tag, DEFAULT_SERVER_TAG));
       setManualNameEdited(false);
       manualNameEditedRef.current = false;
     } else if (!manualNameEditedRef.current) {
@@ -314,11 +315,11 @@ export default function NewServerModal({ isOpen, onClose, onAddServer, directory
           <div className="input-container">
             <select
               id="new-tag"
-              value={matchedEntry?.tag || tag}
+              value={normalizeServerTag(matchedEntry?.tag || tag, DEFAULT_SERVER_TAG)}
               disabled={Boolean(matchedEntry)}
               onChange={e => setTag(e.target.value)}
             >
-              {['Roleplay', 'Training', 'ไม่มี'].map(t => <option key={t}>{t}</option>)}
+              {[...CATEGORY_TAGS, 'ไม่มี'].map(t => <option key={t}>{t}</option>)}
             </select>
           </div>
 

@@ -22,6 +22,9 @@ const DEFAULT_SOCIAL_RATE_LIMITS = {
   '/api/social/profile-update': { max: 20, windowMs: 10 * 60_000 },
   '/api/social/friend-request': { max: 20, windowMs: 60 * 60_000 },
   '/api/social/game-invite': { max: 20, windowMs: 10 * 60_000 },
+  '/api/social/chat-send': { max: 15, windowMs: 30_000 },
+  '/api/social/chat-history': { max: 60, windowMs: 60_000 },
+  '/api/social/chat-read': { max: 60, windowMs: 60_000 },
   '/api/social/search': { max: 40, windowMs: 60_000 },
   '/api/social/heartbeat': { max: 40, windowMs: 60_000 },
   defaultMutation: { max: 60, windowMs: 60_000 },
@@ -310,7 +313,10 @@ export function createApi(services = {}) {
       '/api/social/server-favorite': 'POST',
       '/api/social/demo-seed': 'POST',
       '/api/social/game-invite': 'POST',
-      '/api/social/game-invite-respond': 'POST'
+      '/api/social/game-invite-respond': 'POST',
+      '/api/social/chat-history': 'POST',
+      '/api/social/chat-send': 'POST',
+      '/api/social/chat-read': 'POST'
     };
 
     if (!routes[pathname]) return send(res, 404, { error: 'API not found' });
@@ -571,6 +577,15 @@ export function createApi(services = {}) {
         }
         if (pathname === '/api/social/game-invite-respond') {
           return send(res, 200, { success: true, ...social.respondGameInvite(userId, body.inviteId, body.action) });
+        }
+        if (pathname === '/api/social/chat-history') {
+          return send(res, 200, { success: true, ...social.getChatHistory(userId, body.friendId) });
+        }
+        if (pathname === '/api/social/chat-send') {
+          return send(res, 200, { success: true, ...social.sendChatMessage(userId, body.friendId, body.body) });
+        }
+        if (pathname === '/api/social/chat-read') {
+          return send(res, 200, { success: true, ...social.markChatRead(userId, body.friendId) });
         }
       }
 

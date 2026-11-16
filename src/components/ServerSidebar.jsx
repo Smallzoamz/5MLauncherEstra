@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
   BookOpen,
   Camera,
   ChevronDown,
+  ChevronRight,
   Gamepad2,
   Globe,
   Headphones,
@@ -22,6 +23,52 @@ import ServerAvatar from './ServerAvatar';
 import { UserAvatar } from './UserAvatar';
 import { APP_VERSION } from '../shared/patcherConfig';
 import { COMMUNITY_CHANNELS } from '../shared/communityLinks';
+import { CATEGORY_TAGS, DEFAULT_SERVER_TAG, normalizeServerTag } from '../shared/serverTags';
+
+const SIDEBAR_CAT_STORAGE_KEY = 'estra_sidebar_tag_categories_v1';
+
+function loadCategoryPrefs() {
+  try {
+    const raw = localStorage.getItem(SIDEBAR_CAT_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function SidebarServerRow({ server, activeServerId, onSelectServer, onToggleFavoriteServer, showTagMeta = true }) {
+  return (
+    <div className={`rail-fav-row${server.id === activeServerId ? ' selected' : ''}`}>
+      <button
+        type="button"
+        className="rail-fav-select"
+        aria-label={`เลือกเมือง ${server.name}`}
+        aria-pressed={server.id === activeServerId}
+        title={`${server.name} · ${server.ip}`}
+        onClick={() => onSelectServer(server.id)}
+      >
+        <ServerAvatar server={server} />
+        <span className="rail-fav-copy">
+          <strong>{server.name}</strong>
+          <small>
+            {showTagMeta ? normalizeServerTag(server.tag, DEFAULT_SERVER_TAG) : 'FiveM'}
+            {server.status === 'Online' && server.onlinePlayers != null ? ` · ${server.onlinePlayers} คน` : ''}
+          </small>
+        </span>
+      </button>
+      <button
+        type="button"
+        className={`rail-fav-star${server.favorite ? ' active' : ''}`}
+        aria-label={server.favorite ? `เลิกปักหมุด ${server.name}` : `ปักหมุด ${server.name} เป็นเมืองโปรด`}
+        aria-pressed={!!server.favorite}
+        onClick={() => onToggleFavoriteServer(server)}
+      >
+        <Star size={12} fill={server.favorite ? 'currentColor' : 'none'} />
+      </button>
+    </div>
+  );
+}
 
 function DiscordGlyph() {
   return (
@@ -65,8 +112,35 @@ export default function ServerSidebar({
   onOpenCommunityLink
 }) {
   const user = social?.authenticated ? social.user : null;
+  const [categoryPrefs, setCategoryPrefs] = useState(loadCategoryPrefs);
   const favoriteServers = servers.filter(s => s.favorite);
-  const shownFavorites = favoriteServers.length > 0 ? favoriteServers : servers;
+
+  const groupedByTag = new Map();
+  for (const tag of CATEGORY_TAGS) groupedByTag.set(tag, []);
+  const uncategorized = [];
+  for (const srv of servers) {
+    const resolved = normalizeServerTag(srv.tag, DEFAULT_SERVER_TAG);
+    if (groupedByTag.has(resolved)) groupedByTag.get(resolved).push(srv);
+    else uncategorized.push(srv);
+  }
+  const categorySections = [
+    ...CATEGORY_TAGS.map(tag => ({ key: tag, label: tag, items: groupedByTag.get(tag) || [] })),
+    ...(uncategorized.length > 0 ? [{ key: 'ไม่มี', label: 'ไม่มีหมวดหมู่', items: uncategorized }] : [])
+  ];
+
+  const isCategoryOpen = section => {
+    if (typeof categoryPrefs[section.key] === 'boolean') return categoryPrefs[section.key];
+    return section.items.length > 0;
+  };
+
+  const toggleCategory = section => {
+    const nextOpen = !isCategoryOpen(section);
+    setCategoryPrefs(prev => {
+      const next = { ...prev, [section.key]: nextOpen };
+      try { localStorage.setItem(SIDEBAR_CAT_STORAGE_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
 
   return (
     <aside className="nav-rail" aria-label="เมนู Launcher">
@@ -232,9 +306,7 @@ export default function ServerSidebar({
 
       <div className="rail-section rail-favorites-section">
         <div className="rail-section-head">
-          <span className="rail-section-label">
-            {favoriteServers.length > 0 ? 'My favorites' : 'เมืองที่บันทึก'}
-          </span>
+          <span className="rail-section-label">My favorites</span>
           <button
             type="button"
             className="rail-add-fav-btn"
@@ -247,39 +319,63 @@ export default function ServerSidebar({
         </div>
 
         <div className="rail-servers">
-          {shownFavorites.map(server => (
-            <div
-              key={server.id}
-              className={`rail-fav-row${server.id === activeServerId ? ' selected' : ''}`}
-            >
-              <button
-                type="button"
-                className="rail-fav-select"
-                aria-label={`เลือกเมือง ${server.name}`}
-                aria-pressed={server.id === activeServerId}
-                title={`${server.name} · ${server.ip}`}
-                onClick={() => onSelectServer(server.id)}
-              >
-                <ServerAvatar server={server} />
-                <span className="rail-fav-copy">
-                  <strong>{server.name}</strong>
-                  <small>
-                    {server.tag || 'FiveM'}
-                    {server.status === 'Online' && server.onlinePlayers != null ? ` · ${server.onlinePlayers} คน` : ''}
-                  </small>
-                </span>
-              </button>
-              <button
-                type="button"
-                className={`rail-fav-star${server.favorite ? ' active' : ''}`}
-                aria-label={server.favorite ? `เลิกปักหมุด ${server.name}` : `ปักหมุด ${server.name} เป็นเมืองโปรด`}
-                aria-pressed={!!server.favorite}
-                onClick={() => onToggleFavoriteServer(server)}
-              >
-                <Star size={12} fill={server.favorite ? 'currentColor' : 'none'} />
-              </button>
-            </div>
-          ))}
+          {favoriteServers.length > 0 ? (
+            favoriteServers.map(server => (
+              <SidebarServerRow
+                key={`fav-${server.id}`}
+                server={server}
+                activeServerId={activeServerId}
+                onSelectServer={onSelectServer}
+                onToggleFavoriteServer={onToggleFavoriteServer}
+              />
+            ))
+          ) : (
+            <p className="rail-cat-hint">กด ★ ที่ชื่อเมืองเพื่อปักหมุดไว้ด้านบน</p>
+          )}
+
+          <div className="rail-categories-head">
+            <span className="rail-section-label">Categories</span>
+          </div>
+
+          <div className="rail-categories-list">
+            {categorySections.map(section => {
+              const open = isCategoryOpen(section);
+              return (
+                <div key={section.key} className="rail-cat-group">
+                  <button
+                    type="button"
+                    className={`rail-cat-toggle${open ? ' open' : ''}`}
+                    aria-expanded={open}
+                    onClick={() => toggleCategory(section)}
+                  >
+                    <span className="rail-cat-title">
+                      {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                      <span>{section.label}</span>
+                    </span>
+                    <span className="rail-cat-count">{section.items.length}</span>
+                  </button>
+                  {open && (
+                    <div className="rail-cat-items">
+                      {section.items.length > 0 ? (
+                        section.items.map(server => (
+                          <SidebarServerRow
+                            key={`cat-${section.key}-${server.id}`}
+                            server={server}
+                            activeServerId={activeServerId}
+                            onSelectServer={onSelectServer}
+                            onToggleFavoriteServer={onToggleFavoriteServer}
+                            showTagMeta={false}
+                          />
+                        ))
+                      ) : (
+                        <p className="rail-cat-empty">ยังไม่มีเมืองในหมวดนี้</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
 

@@ -1,15 +1,17 @@
 import React, { useState } from 'react';
 import { Plus, X, ArrowUpRight, Trash2, Search, Star } from 'lucide-react';
 import ServerAvatar from './ServerAvatar';
+import { CATEGORY_TAGS, DEFAULT_SERVER_TAG, normalizeServerTag } from '../shared/serverTags';
 
 export default function ServerLibrary({ servers, activeId, onSelect, onRemove, onToggleFavorite, onAdd, onClose, onRequestConfirm }) {
   const [filter, setFilter] = useState('ทั้งหมด');
   const [search, setSearch] = useState('');
 
   const shown = servers.filter(s => {
+    const resolvedTag = normalizeServerTag(s.tag, DEFAULT_SERVER_TAG);
     const matchesFilter =
       filter === 'ทั้งหมด' ||
-      (filter === 'เมืองโปรด' ? !!s.favorite : s.tag === filter);
+      (filter === 'เมืองโปรด' ? !!s.favorite : resolvedTag === filter);
     const matchesSearch = (s.name + ' ' + s.ip).toLowerCase().includes(search.toLowerCase());
     return matchesFilter && matchesSearch;
   });
@@ -42,7 +44,7 @@ export default function ServerLibrary({ servers, activeId, onSelect, onRemove, o
             </button>
           </div>
           <div className="sidebar-filters">
-            {['ทั้งหมด', 'เมืองโปรด', 'Roleplay', 'Training', 'ไม่มี'].map(tag => (
+            {['ทั้งหมด', 'เมืองโปรด', ...CATEGORY_TAGS, 'ไม่มี'].map(tag => (
               <button
                 key={tag}
                 className={`filter-tab ${filter === tag ? 'active' : ''}`}
@@ -62,7 +64,7 @@ export default function ServerLibrary({ servers, activeId, onSelect, onRemove, o
                   <span>
                     <strong>{s.name}</strong>
                     <small>
-                      {s.tag || 'ไม่มี'} · {s.ip} · {['Online', 'Offline'].includes(s.status) ? s.status : 'ยังไม่ทราบสถานะ'}
+                      {normalizeServerTag(s.tag, DEFAULT_SERVER_TAG)} · {s.ip} · {['Online', 'Offline'].includes(s.status) ? s.status : 'ยังไม่ทราบสถานะ'}
                     </small>
                   </span>
                   <ArrowUpRight size={18} />

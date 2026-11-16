@@ -15,6 +15,7 @@ import {
 import { DEFAULT_SETTINGS } from '../src/services/storageService.js';
 import { validateAvatarUrl } from '../src/shared/profileAvatar.js';
 import { resolveCommunityLinks, sanitizeExternalUrl } from '../src/shared/communityLinks.js';
+import { pruneChatMessages, loadCachedChat, saveCachedChat, clearUserChatCache } from '../src/services/chatCacheService.js';
 
 test('socialStore handles register, password hashing, login, friend requests, presence, and favorites', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'estra-social-'));
@@ -407,4 +408,105 @@ test('socialStore and /api/social/change-password enforce first-login password c
   assert.throws(() => store.login({ username: 'discord_newbie', password: 'TempPass-99' }), /ไม่ถูกต้อง/);
   const nextLogin = store.login({ username: 'discord_newbie', password: 'NewStrongPass99' });
   assert.equal(nextLogin.user.mustChangePassword, false);
+});
+
+test('bounded direct messages enforce friendship, 50-msg rolling cap, 7-day TTL purge, unread tracking, and HTTP BFF', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'estra-dm-'));
+  const store = createSocialStore({ dbPath: path.join(dir, 'social.db') });
+  const middleware = createApi({ socialStore: store });
+  const server = http.createServer(middleware);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    await new Promise(resolve => server.close(resolve));
+    store.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  const alice = store.register({ username: 'dm_alice', password: 'password123', displayName: 'Alice' });
+  const bob = store.register({ username: 'dm_bob', password: 'password123', displayName: 'Bob' });
+  const stranger = store.register({ username: 'dm_stranger', password: 'password123', displayName: 'Stranger' });
+
+  // Non-friends cannot chat
+  assert.throws(() => store.sendChatMessage(alice.user.id, stranger.user.id, 'hi'), /เฉพาะผู้ที่เป็นเพื่อนกันเท่านั้น/);
+  assert.throws(() => store.getChatHistory(alice.user.id, stranger.user.id), /เฉพาะผู้ที่เป็นเพื่อนกันเท่านั้น/);
+
+  // Become friends
+  store.sendFriendRequest(alice.user.id, bob.user.username);
+  const bobState0 = store.getSocialState(bob.user.id);
+  store.respondFriendRequest(bob.user.id, bobState0.incomingRequests[0].id, 'accept');
+
+  // Empty & >500 chars rejected
+  assert.throws(() => store.sendChatMessage(alice.user.id, bob.user.id, '   \x00  '), /พิมพ์ข้อความก่อนส่ง/);
+  assert.throws(() => store.sendChatMessage(alice.user.id, bob.user.id, 'x'.repeat(501)), /ไม่เกิน 500/);
+
+  // 7-day TTL expires old messages cleanly on next write/read
+  const eightDaysAgo = Date.now() - 8 * 24 * 60 * 60 * 1000;
+  store.sendChatMessage(alice.user.id, bob.user.id, 'expired old msg', eightDaysAgo);
+
+  // Rolling 50-message cap per pair keeps only newest 50
+  for (let i = 1; i <= 55; i += 1) {
+    store.sendChatMessage(alice.user.id, bob.user.id, `msg-${i}`);
+  }
+  const bobStateBeforeRead = store.getSocialState(bob.user.id);
+  assert.equal(bobStateBeforeRead.unreadMessages[alice.user.id], 50);
+
+  const hist = store.getChatHistory(bob.user.id, alice.user.id);
+  assert.equal(hist.messages.length, 50);
+  assert.equal(hist.messages[0].body, 'msg-6');
+  assert.equal(hist.messages[49].body, 'msg-55');
+  assert.equal(hist.unreadMessages[alice.user.id] || 0, 0);
+
+  // HTTP BFF auth + send + history
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const { token } = await fetch(`${base}/api/session`).then(r => r.json());
+  assert.equal(
+    (await fetch(`${base}/api/social/chat-history`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Launcher-Token': token, 'X-Social-Server': LOCAL_SOCIAL_SENTINEL },
+      body: JSON.stringify({ friendId: alice.user.id })
+    })).status,
+    401
+  );
+
+  const loginBob = await fetch(`${base}/api/social/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Launcher-Token': token, 'X-Social-Server': LOCAL_SOCIAL_SENTINEL },
+    body: JSON.stringify({ username: 'dm_bob', password: 'password123' })
+  });
+  const bobCookie = loginBob.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
+  const sendRes = await fetch(`${base}/api/social/chat-send`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Launcher-Token': token, 'X-Social-Server': LOCAL_SOCIAL_SENTINEL, Cookie: bobCookie },
+    body: JSON.stringify({ friendId: alice.user.id, body: 'สวัสดี Alice!' })
+  });
+  assert.equal(sendRes.status, 200);
+  const sendJson = await sendRes.json();
+  assert.equal(sendJson.message.body, 'สวัสดี Alice!');
+
+  // Unfriend deletes conversation messages
+  store.removeFriend(alice.user.id, bob.user.id);
+  assert.throws(() => store.getChatHistory(alice.user.id, bob.user.id), /เฉพาะผู้ที่เป็นเพื่อนกันเท่านั้น/);
+
+  // Local cache prunes expired messages & isolates per user
+  const values = new Map();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      get length() { return values.size; },
+      key: i => Array.from(values.keys())[i] || null,
+      getItem: k => values.get(k) ?? null,
+      setItem: (k, v) => values.set(k, String(v)),
+      removeItem: k => values.delete(k)
+    }
+  });
+  const pruned = pruneChatMessages([
+    { id: 1, senderId: 'a', recipientId: 'b', body: 'expired', createdAt: new Date(eightDaysAgo).toISOString(), expiresAt: new Date(Date.now() - 1000).toISOString() },
+    { id: 2, senderId: 'a', recipientId: 'b', body: 'fresh', createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() }
+  ]);
+  assert.equal(pruned.length, 1);
+  assert.equal(pruned[0].body, 'fresh');
+  saveCachedChat('userA', 'friendB', pruned);
+  assert.equal(loadCachedChat('userA', 'friendB').length, 1);
+  clearUserChatCache('userA');
+  assert.equal(loadCachedChat('userA', 'friendB').length, 0);
 });

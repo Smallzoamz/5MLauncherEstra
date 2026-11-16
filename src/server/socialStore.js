@@ -7,7 +7,26 @@ import { AVATAR_PALETTE, validateAvatarUrl } from '../shared/profileAvatar.js';
 
 const ONLINE_WINDOW_MS = 45_000;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const DIRECT_MESSAGE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const DIRECT_MESSAGE_PAIR_CAP = 50;
 const VALID_STATUS_PREFS = new Set(['online', 'away', 'invisible', 'offline']);
+
+function chatPairKey(a, b) {
+  return String(a) <= String(b) ? `${a}:${b}` : `${b}:${a}`;
+}
+
+function sanitizeChatBody(raw) {
+  const cleaned = String(raw ?? '')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
+    .trim();
+  if (!cleaned) {
+    throw Object.assign(new Error('กรุณาพิมพ์ข้อความก่อนส่ง'), { status: 400 });
+  }
+  if ([...cleaned].length > 500) {
+    throw Object.assign(new Error('ข้อความต้องยาวไม่เกิน 500 ตัวอักษร'), { status: 400 });
+  }
+  return cleaned;
+}
 
 export function defaultSocialDbPath() {
   const base = process.env.LOCALAPPDATA || path.join(os.homedir(), '.estra-launcher');
@@ -179,6 +198,19 @@ export function createSocialStore(options = {}) {
       expires_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_game_invites_to ON game_invites(to_user_id, status, expires_at);
+    CREATE TABLE IF NOT EXISTS direct_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pair_key TEXT NOT NULL,
+      sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      recipient_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      body TEXT NOT NULL,
+      read_at TEXT,
+      created_at TEXT NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_dm_pair ON direct_messages(pair_key, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_dm_unread ON direct_messages(recipient_id, sender_id, read_at);
+    CREATE INDEX IF NOT EXISTS idx_dm_expires ON direct_messages(expires_at);
   `);
 
   const userCols = db.prepare('PRAGMA table_info(users)').all();
@@ -422,10 +454,13 @@ export function createSocialStore(options = {}) {
       ORDER BY gi.created_at DESC
     `).all(userId, now);
 
+    const unreadMessages = getUnreadMessageCounts(userId, now);
+
     return {
       user: toPublicUser(userRow, now, true),
       favoriteServers: getUserFavoriteServers(userId),
       friends,
+      unreadMessages,
       incomingRequests: incomingRows.map(r => ({
         id: r.request_id,
         createdAt: r.requested_at,
@@ -540,7 +575,115 @@ export function createSocialStore(options = {}) {
     const res = db.prepare('DELETE FROM friendships WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)')
       .run(userId, friendId, friendId, userId);
     if (!res.changes) throw Object.assign(new Error('ไม่พบรายชื่อเพื่อนนี้'), { status: 404 });
+    db.prepare('DELETE FROM direct_messages WHERE pair_key = ?').run(chatPairKey(userId, friendId));
     return { success: true };
+  }
+
+  function getUnreadMessageCounts(userId, now = Date.now()) {
+    const rows = db.prepare(`
+      SELECT dm.sender_id, COUNT(*) AS cnt
+      FROM direct_messages dm
+      JOIN friendships f ON f.user_id = ? AND f.friend_id = dm.sender_id
+      WHERE dm.recipient_id = ? AND dm.read_at IS NULL AND dm.expires_at > ?
+      GROUP BY dm.sender_id
+    `).all(userId, userId, now);
+    const out = {};
+    for (const r of rows) out[r.sender_id] = Number(r.cnt || 0);
+    return out;
+  }
+
+  function formatDirectMessageRow(row) {
+    return {
+      id: row.id,
+      senderId: row.sender_id,
+      recipientId: row.recipient_id,
+      body: row.body,
+      readAt: row.read_at || null,
+      createdAt: row.created_at,
+      expiresAt: new Date(row.expires_at).toISOString()
+    };
+  }
+
+  function getChatHistory(userId, friendId) {
+    if (!friendId || friendId === userId) {
+      throw Object.assign(new Error('ไม่พบเพื่อนที่ต้องการสนทนา'), { status: 400 });
+    }
+    const isFriend = db.prepare('SELECT 1 FROM friendships WHERE user_id = ? AND friend_id = ?').get(userId, friendId);
+    if (!isFriend) {
+      throw Object.assign(new Error('สามารถแชทได้เฉพาะผู้ที่เป็นเพื่อนกันเท่านั้น'), { status: 403 });
+    }
+    const now = Date.now();
+    db.prepare('DELETE FROM direct_messages WHERE expires_at <= ?').run(now);
+    const pair = chatPairKey(userId, friendId);
+    db.prepare('UPDATE direct_messages SET read_at = ? WHERE pair_key = ? AND recipient_id = ? AND sender_id = ? AND read_at IS NULL')
+      .run(new Date(now).toISOString(), pair, userId, friendId);
+
+    const rows = db.prepare(`
+      SELECT * FROM (
+        SELECT * FROM direct_messages
+        WHERE pair_key = ? AND expires_at > ?
+        ORDER BY id DESC
+        LIMIT ?
+      ) sub
+      ORDER BY id ASC
+    `).all(pair, now, DIRECT_MESSAGE_PAIR_CAP);
+
+    return {
+      friendId,
+      messages: rows.map(formatDirectMessageRow),
+      unreadMessages: getUnreadMessageCounts(userId, now)
+    };
+  }
+
+  function sendChatMessage(userId, friendId, body, nowOverride = null) {
+    if (!friendId || friendId === userId) {
+      throw Object.assign(new Error('ไม่พบเพื่อนที่ต้องการส่งข้อความ'), { status: 400 });
+    }
+    const isFriend = db.prepare('SELECT 1 FROM friendships WHERE user_id = ? AND friend_id = ?').get(userId, friendId);
+    if (!isFriend) {
+      throw Object.assign(new Error('สามารถส่งข้อความได้เฉพาะผู้ที่เป็นเพื่อนกันเท่านั้น'), { status: 403 });
+    }
+    const friendRow = db.prepare('SELECT id, is_demo FROM users WHERE id = ?').get(friendId);
+    if (!friendRow || friendRow.is_demo) {
+      throw Object.assign(new Error('ไม่สามารถส่งข้อความถึงบัญชีตัวอย่างได้'), { status: 400 });
+    }
+    const cleanBody = sanitizeChatBody(body);
+    const now = Number.isFinite(nowOverride) ? nowOverride : Date.now();
+    const pair = chatPairKey(userId, friendId);
+    const info = db.prepare(`
+      INSERT INTO direct_messages (pair_key, sender_id, recipient_id, body, created_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(pair, userId, friendId, cleanBody, new Date(now).toISOString(), now + DIRECT_MESSAGE_TTL_MS);
+
+    db.prepare(`
+      DELETE FROM direct_messages
+      WHERE pair_key = ?
+        AND id NOT IN (
+          SELECT id FROM direct_messages WHERE pair_key = ? ORDER BY id DESC LIMIT ?
+        )
+    `).run(pair, pair, DIRECT_MESSAGE_PAIR_CAP);
+    db.prepare('DELETE FROM direct_messages WHERE expires_at <= ?').run(now);
+
+    const inserted = db.prepare('SELECT * FROM direct_messages WHERE id = ?').get(Number(info.lastInsertRowid));
+    return {
+      friendId,
+      message: formatDirectMessageRow(inserted),
+      unreadMessages: getUnreadMessageCounts(userId, now)
+    };
+  }
+
+  function markChatRead(userId, friendId) {
+    if (!friendId || friendId === userId) {
+      throw Object.assign(new Error('ข้อมูลเพื่อนไม่ถูกต้อง'), { status: 400 });
+    }
+    const now = Date.now();
+    const pair = chatPairKey(userId, friendId);
+    db.prepare('UPDATE direct_messages SET read_at = ? WHERE pair_key = ? AND recipient_id = ? AND sender_id = ? AND read_at IS NULL')
+      .run(new Date(now).toISOString(), pair, userId, friendId);
+    return {
+      friendId,
+      unreadMessages: getUnreadMessageCounts(userId, now)
+    };
   }
 
   function toggleFavoriteServer(userId, server, favorite) {
@@ -685,6 +828,9 @@ export function createSocialStore(options = {}) {
     seedDemoFriendsForUser,
     sendGameInvite,
     respondGameInvite,
+    getChatHistory,
+    sendChatMessage,
+    markChatRead,
     close: () => db.close()
   };
 }

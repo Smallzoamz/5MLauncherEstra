@@ -75,6 +75,18 @@ struct StoredGameInvite {
     expires_at_ms: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredDirectMessage {
+    id: u64,
+    pair_key: String,
+    sender_id: String,
+    recipient_id: String,
+    body: String,
+    read_at: Option<String>,
+    created_at: String,
+    expires_at_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct LocalSocialDb {
     users: Vec<StoredUser>,
@@ -83,6 +95,8 @@ struct LocalSocialDb {
     favorite_servers: Vec<StoredFavoriteServer>,
     #[serde(default)]
     game_invites: Vec<StoredGameInvite>,
+    #[serde(default)]
+    direct_messages: Vec<StoredDirectMessage>,
     active_user_id: Option<String>,
 }
 
@@ -453,7 +467,30 @@ fn build_social_state(db: &LocalSocialDb, user_id: &str) -> Result<Value, String
         "outgoingRequests": outgoing,
         "incomingInvites": incoming_invites,
         "outgoingInvites": outgoing_invites,
+        "unreadMessages": unread_messages_map(db, user_id, now),
     }))
+}
+
+fn chat_pair_key(a: &str, b: &str) -> String {
+    if a <= b {
+        format!("{a}:{b}")
+    } else {
+        format!("{b}:{a}")
+    }
+}
+
+fn unread_messages_map(db: &LocalSocialDb, user_id: &str, now: u64) -> Value {
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for dm in &db.direct_messages {
+        if dm.recipient_id == user_id
+            && dm.read_at.is_none()
+            && dm.expires_at_ms > now
+            && db.friendships.iter().any(|f| f.user_id == user_id && f.friend_id == dm.sender_id)
+        {
+            *counts.entry(dm.sender_id.clone()).or_insert(0) += 1;
+        }
+    }
+    json!(counts)
 }
 
 fn handle_local(state: &SocialState, path: &str, body: Value) -> Result<Value, String> {
@@ -836,6 +873,8 @@ fn handle_local(state: &SocialState, path: &str, body: Value) -> Result<Value, S
                         !((f.user_id == uid && f.friend_id == friend_id)
                             || (f.user_id == friend_id && f.friend_id == uid))
                     });
+                    let pair = chat_pair_key(&uid, friend_id);
+                    db.direct_messages.retain(|dm| dm.pair_key != pair);
                     save_db(&db)?;
                     build_social_state(&db, &uid)
                 }
@@ -993,6 +1032,121 @@ fn handle_local(state: &SocialState, path: &str, body: Value) -> Result<Value, S
                     let mut st = build_social_state(&db, &uid)?;
                     st["inviteServer"] = inv_server;
                     Ok(st)
+                }
+                "/api/social/chat-history" => {
+                    let fid = body["friendId"].as_str().unwrap_or("").trim();
+                    if fid.is_empty() || fid == uid || !db.friendships.iter().any(|f| f.user_id == uid && f.friend_id == fid) {
+                        return Err("สามารถแชทได้เฉพาะผู้ที่เป็นเพื่อนกันเท่านั้น".to_string());
+                    }
+                    db.direct_messages.retain(|dm| dm.expires_at_ms > now);
+                    let pair = chat_pair_key(&uid, fid);
+                    let read_ts = now_iso();
+                    for dm in &mut db.direct_messages {
+                        if dm.pair_key == pair && dm.recipient_id == uid && dm.sender_id == fid && dm.read_at.is_none() {
+                            dm.read_at = Some(read_ts.clone());
+                        }
+                    }
+                    let mut msgs: Vec<Value> = db
+                        .direct_messages
+                        .iter()
+                        .filter(|dm| dm.pair_key == pair && dm.expires_at_ms > now)
+                        .map(|dm| {
+                            json!({
+                                "id": dm.id,
+                                "senderId": dm.sender_id,
+                                "recipientId": dm.recipient_id,
+                                "body": dm.body,
+                                "readAt": dm.read_at,
+                                "createdAt": dm.created_at,
+                            })
+                        })
+                        .collect();
+                    if msgs.len() > 50 {
+                        msgs = msgs.split_off(msgs.len() - 50);
+                    }
+                    save_db(&db)?;
+                    Ok(json!({
+                        "success": true,
+                        "friendId": fid,
+                        "messages": msgs,
+                        "unreadMessages": unread_messages_map(&db, &uid, now),
+                    }))
+                }
+                "/api/social/chat-send" => {
+                    let fid = body["friendId"].as_str().unwrap_or("").trim();
+                    if fid.is_empty() || fid == uid || !db.friendships.iter().any(|f| f.user_id == uid && f.friend_id == fid) {
+                        return Err("สามารถส่งข้อความได้เฉพาะผู้ที่เป็นเพื่อนกันเท่านั้น".to_string());
+                    }
+                    if !db.users.iter().any(|u| u.id == fid && !u.is_demo) {
+                        return Err("ไม่สามารถส่งข้อความถึงบัญชีตัวอย่างได้".to_string());
+                    }
+                    let raw_body = body["body"].as_str().unwrap_or("");
+                    let cleaned: String = raw_body
+                        .chars()
+                        .filter(|c| *c == '\n' || *c == '\t' || !c.is_control())
+                        .collect::<String>()
+                        .trim()
+                        .to_string();
+                    if cleaned.is_empty() {
+                        return Err("กรุณาพิมพ์ข้อความก่อนส่ง".to_string());
+                    }
+                    if cleaned.chars().count() > 500 {
+                        return Err("ข้อความต้องยาวไม่เกิน 500 ตัวอักษร".to_string());
+                    }
+                    db.direct_messages.retain(|dm| dm.expires_at_ms > now);
+                    let pair = chat_pair_key(&uid, fid);
+                    let next_id = db.direct_messages.iter().map(|m| m.id).max().unwrap_or(0) + 1;
+                    let msg = StoredDirectMessage {
+                        id: next_id,
+                        pair_key: pair.clone(),
+                        sender_id: uid.clone(),
+                        recipient_id: fid.to_string(),
+                        body: cleaned,
+                        read_at: None,
+                        created_at: now_iso(),
+                        expires_at_ms: now + 7 * 24 * 60 * 60 * 1000,
+                    };
+                    db.direct_messages.push(msg.clone());
+                    let pair_ids: Vec<u64> = db
+                        .direct_messages
+                        .iter()
+                        .filter(|m| m.pair_key == pair)
+                        .map(|m| m.id)
+                        .collect();
+                    if pair_ids.len() > 50 {
+                        let cutoff = pair_ids[pair_ids.len() - 50];
+                        db.direct_messages.retain(|m| m.pair_key != pair || m.id >= cutoff);
+                    }
+                    save_db(&db)?;
+                    Ok(json!({
+                        "success": true,
+                        "friendId": fid,
+                        "message": {
+                            "id": msg.id,
+                            "senderId": msg.sender_id,
+                            "recipientId": msg.recipient_id,
+                            "body": msg.body,
+                            "readAt": msg.read_at,
+                            "createdAt": msg.created_at,
+                        },
+                        "unreadMessages": unread_messages_map(&db, &uid, now),
+                    }))
+                }
+                "/api/social/chat-read" => {
+                    let fid = body["friendId"].as_str().unwrap_or("").trim();
+                    let pair = chat_pair_key(&uid, fid);
+                    let read_ts = now_iso();
+                    for dm in &mut db.direct_messages {
+                        if dm.pair_key == pair && dm.recipient_id == uid && dm.sender_id == fid && dm.read_at.is_none() {
+                            dm.read_at = Some(read_ts.clone());
+                        }
+                    }
+                    save_db(&db)?;
+                    Ok(json!({
+                        "success": true,
+                        "friendId": fid,
+                        "unreadMessages": unread_messages_map(&db, &uid, now),
+                    }))
                 }
                 _ => Err("Social route not found".to_string()),
             }

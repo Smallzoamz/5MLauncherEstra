@@ -17,7 +17,7 @@ function getMemorySupabaseClient() {
   return memoryClient;
 }
 
-export function subscribeSocialRealtime({ accessToken, userId, socialServerUrl, onChange }) {
+export function subscribeSocialRealtime({ accessToken, userId, socialServerUrl, onChange, onDirectMessage }) {
   if (!accessToken || !userId || !isSupabaseGatewayUrl(socialServerUrl) || typeof onChange !== 'function') {
     return () => {};
   }
@@ -42,10 +42,55 @@ export function subscribeSocialRealtime({ accessToken, userId, socialServerUrl, 
     .on('postgres_changes', { event: '*', schema: 'public', table: 'launcher_favorite_servers', filter: `user_id=eq.${userId}` }, triggerRefresh)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'launcher_game_invites', filter: `to_user_id=eq.${userId}` }, triggerRefresh)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'launcher_game_invites', filter: `from_user_id=eq.${userId}` }, triggerRefresh)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'launcher_direct_messages', filter: `recipient_id=eq.${userId}` }, payload => {
+      onDirectMessage?.(payload);
+      triggerRefresh();
+    })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'launcher_direct_messages', filter: `sender_id=eq.${userId}` }, payload => {
+      onDirectMessage?.(payload);
+    })
     .subscribe();
 
   return () => {
     clearTimeout(timer);
     void client.removeChannel(channel);
+  };
+}
+
+export function subscribeChatTyping({ accessToken, userId, friendId, socialServerUrl, onFriendTyping }) {
+  if (!accessToken || !userId || !friendId || !isSupabaseGatewayUrl(socialServerUrl)) {
+    return { sendTyping: () => {}, unsubscribe: () => {} };
+  }
+
+  const client = getMemorySupabaseClient();
+  client.realtime.setAuth(accessToken);
+
+  const pairKey = String(userId) <= String(friendId) ? `${userId}:${friendId}` : `${friendId}:${userId}`;
+  const channel = client
+    .channel(`estra-dm-typing-${pairKey}`, { config: { broadcast: { self: false } } })
+    .on('broadcast', { event: 'typing' }, ({ payload }) => {
+      if (payload?.senderId === friendId) {
+        onFriendTyping?.();
+      }
+    })
+    .subscribe();
+
+  let lastSentAt = 0;
+  const sendTyping = () => {
+    const now = Date.now();
+    if (now - lastSentAt < 1500) return;
+    lastSentAt = now;
+    void channel.send({
+      type: 'broadcast',
+      event: 'typing',
+      payload: { senderId: userId }
+    }).catch(() => {});
+  };
+
+  return {
+    sendTyping,
+    unsubscribe: () => {
+      void client.removeChannel(channel);
+    }
   };
 }

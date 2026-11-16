@@ -7,7 +7,9 @@ import { cityBackdrop } from '../shared/cityBackdrop';
 import MicIndicator from './MicIndicator';
 import ServerAvatar from './ServerAvatar';
 import ScreenshotsGallery from './ScreenshotsGallery';
-import { APP_VERSION, normalizePatchManifestUrl } from '../shared/patcherConfig';
+import PatchNewsSection from './PatchNewsSection';
+import { APP_VERSION } from '../shared/patcherConfig';
+import { SERVER_TAGS, DEFAULT_SERVER_TAG, normalizeServerTag } from '../shared/serverTags';
 import {
   BookOpen,
   Play,
@@ -62,11 +64,16 @@ export default function MainLauncher({
   const [error, setError] = useState('');
   const [bannerDraft, setBannerDraft] = useState(server?.customBannerUrl || '');
   const [bannerError, setBannerError] = useState('');
-  const [patchDraft, setPatchDraft] = useState(server?.patchManifestUrl || '');
-  const [patchError, setPatchError] = useState('');
   const [presence, setPresence] = useState(presenceService.getPresence());
 
   useEffect(() => presenceService.subscribe(setPresence), []);
+  useEffect(() => {
+    setEditing(false);
+    setIp(server?.ip || '');
+    setBannerDraft(server?.customBannerUrl || '');
+    setError('');
+    setBannerError('');
+  }, [server?.id, server?.ip, server?.customBannerUrl]);
 
   if (centerTab === 'screenshots') {
     return (
@@ -78,6 +85,14 @@ export default function MainLauncher({
           onRequestConfirm={onRequestConfirm}
           onNotify={onNotify}
         />
+      </main>
+    );
+  }
+
+  if (centerTab === 'news') {
+    return (
+      <main className="main-content">
+        <PatchNewsSection launcherUpdate={launcherUpdate} onOpenPatcher={onOpenPatcher} />
       </main>
     );
   }
@@ -207,37 +222,6 @@ export default function MainLauncher({
 
   return (
     <main className="main-content">
-      {centerTab === 'news' && (
-        <section className="subtab-panel" aria-label="แพตช์และข่าวสารของเมือง">
-          <div className="subtab-banner">
-            <div>
-              <span className="eyebrow">CITY PATCH &amp; UPDATES</span>
-              <h2>แพตช์ของ {server.name}</h2>
-              <p>
-                {server.patchManifestUrl
-                  ? `เชื่อมต่อไปยัง: ${server.patchManifestUrl}`
-                  : 'เมืองนี้ยังไม่ได้ตั้งค่า Patch Manifest URL — สามารถระบุลิงก์ GitHub Raw HTTPS ด้านล่างได้'}
-              </p>
-            </div>
-            <button type="button" className="btn-action-play" onClick={onOpenPatcher}>
-              <PackageCheck size={16} /> เปิดศูนย์ Patcher
-            </button>
-          </div>
-          {launcherUpdate?.available && (
-            <div className="subtab-update-card">
-              <div>
-                <span className="eyebrow">LAUNCHER UPDATE</span>
-                <strong>Estra Launcher v{launcherUpdate.version} พร้อมอัปเดต</strong>
-                {launcherUpdate.notes && <pre className="subtab-notes">{launcherUpdate.notes}</pre>}
-              </div>
-              <button type="button" className="btn-inline-cobalt" onClick={onOpenPatcher}>
-                ดูรายละเอียดอัปเดต
-              </button>
-            </div>
-          )}
-        </section>
-      )}
-
       {centerTab === 'discover' && (
         <section className="subtab-panel" aria-label="กิจกรรมและสถานะระบบ">
           <div className="subtab-banner">
@@ -295,7 +279,7 @@ export default function MainLauncher({
                 <span>
                   <span className="eyebrow">SELECTED CITY</span>
                   <span className="hero-tag">
-                    {server.tag || 'ไม่มีหมวดหมู่'} <span>·</span> FiveM
+                    {normalizeServerTag(server.tag, DEFAULT_SERVER_TAG)} <span>·</span> FiveM
                   </span>
                 </span>
               </div>
@@ -589,8 +573,8 @@ export default function MainLauncher({
         </div>
       </div>
 
-      {centerTab !== 'discover' && (
-        <details id="server-config" className="configuration-panel" open={centerTab === 'news' ? true : undefined}>
+      {centerTab === 'general' && (
+        <details id="server-config" className="configuration-panel">
           <summary>
             <SlidersHorizontal size={16} />
             <span>ตั้งค่ารายละเอียดเมือง</span>
@@ -645,16 +629,19 @@ export default function MainLauncher({
             <div className="tag-selector-row">
               <span className="tag-label">TAG</span>
               <div className="tag-pills-group">
-                {['ไม่มี', 'Roleplay', 'Training'].map(tag => (
-                  <button
-                    key={tag}
-                    className={`tag-pill-btn ${server.tag === tag ? 'active-roleplay' : ''}`}
-                    aria-pressed={server.tag === tag}
-                    onClick={() => change('tag', tag)}
-                  >
-                    {tag}
-                  </button>
-                ))}
+                {SERVER_TAGS.map(tag => {
+                  const activeTag = normalizeServerTag(server.tag, DEFAULT_SERVER_TAG);
+                  return (
+                    <button
+                      key={tag}
+                      className={`tag-pill-btn ${activeTag === tag ? 'active-roleplay' : ''}`}
+                      aria-pressed={activeTag === tag}
+                      onClick={() => change('tag', tag)}
+                    >
+                      {tag}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -735,46 +722,6 @@ export default function MainLauncher({
                       ? 'กำลังโหลดรูปพื้นหลัง…'
                       : 'ไม่มีแบนเนอร์ที่โหลดได้ จึงใช้ธีมและโลโก้ประจำเมือง'}{' '}
                 • เว้นว่างแล้วบันทึกเพื่อกลับไปใช้รูปอัตโนมัติ
-              </p>
-            </div>
-
-            <div>
-              <label className="field-label" htmlFor="city-patch-manifest">
-                Patch Manifest URL ของเมือง (HTTPS · GitHub)
-              </label>
-              <div className="input-container">
-                <input
-                  id="city-patch-manifest"
-                  type="url"
-                  maxLength={2048}
-                  value={patchDraft}
-                  onChange={e => setPatchDraft(e.target.value)}
-                  placeholder="https://raw.githubusercontent.com/owner/repo/main/patch-manifest.json"
-                />
-                <button
-                  className="btn-inline-orange"
-                  onClick={() => {
-                    const value = patchDraft.trim();
-                    const safe = normalizePatchManifestUrl(value);
-                    if (value && !safe) {
-                      setPatchError('กรุณาระบุ URL แบบ HTTPS เท่านั้น');
-                      return;
-                    }
-                    change('patchManifestUrl', safe || '');
-                    setPatchDraft(safe || '');
-                    setPatchError('');
-                  }}
-                >
-                  บันทึกแพตช์
-                </button>
-              </div>
-              {patchError && (
-                <p role="alert" className="error-message">
-                  {patchError}
-                </p>
-              )}
-              <p className="help-text">
-                ใช้สำหรับตรวจไฟล์และดาวน์โหลดแพตช์เสริมของเมืองผ่านเมนู Patcher • เว้นว่างได้ถ้าเมืองไม่มีไฟล์แพตช์
               </p>
             </div>
           </div>

@@ -20,6 +20,7 @@ import useDialogFocus from './components/useDialogFocus';
 import { getSavedServers, saveServers, getActiveServerId, saveActiveServerId, getSettings, saveSettings, hasSeenOnboardingGuide, markOnboardingGuideSeen } from './services/storageService';
 import { fetchServerDirectory, loadCachedServerDirectory } from './services/serverDirectoryService';
 import { applyDirectoryMetadataToServer, lookupDirectoryServer, normalizeDirectoryAddress, syncLiveServerName } from './shared/serverDirectory';
+import { DEFAULT_SERVER_TAG, normalizeServerTag } from './shared/serverTags';
 import { resolveCommunityLinks } from './shared/communityLinks';
 import { queryServerInfo } from './services/fivemService';
 import CityBackground from './components/CityBackground';
@@ -43,16 +44,19 @@ import { checkLauncherUpdate, installLauncherUpdate } from './services/patcherSe
 import { DEFAULT_GITHUB_REPO } from './shared/patcherConfig';
 import {
   changePassword,
+  fetchChatHistory,
   fetchRealtimeToken,
   fetchSocialSession,
   fetchSocialState,
   loginAccount,
   logoutAccount,
+  markChatRead,
   registerAccount,
   removeFriend,
   respondFriendRequest,
   respondGameInvite,
   searchSocialUsers,
+  sendChatMessage,
   sendFriendRequest,
   sendGameInvite,
   sendHeartbeat,
@@ -62,6 +66,7 @@ import {
 } from './services/socialService';
 import { apiGet } from './services/apiService';
 import { subscribeSocialRealtime } from './services/socialRealtime';
+import { clearUserChatCache } from './services/chatCacheService';
 import { isSupabaseGatewayUrl, resolveSocialServerUrl } from './shared/supabaseConfig';
 
 const EMPTY_SOCIAL = {
@@ -74,7 +79,8 @@ const EMPTY_SOCIAL = {
   outgoingRequests: [],
   favoriteServers: [],
   incomingInvites: [],
-  outgoingInvites: []
+  outgoingInvites: [],
+  unreadMessages: {}
 };
 
 export default function App() {
@@ -91,6 +97,8 @@ export default function App() {
   const [navIndex, setNavIndex] = useState(0);
   const [friendsMobileOpen, setFriendsMobileOpen] = useState(false);
   const [social, setSocial] = useState(EMPTY_SOCIAL);
+  const [realtimeAccessToken, setRealtimeAccessToken] = useState('');
+  const [chatRealtimeTick, setChatRealtimeTick] = useState(0);
   const [gameEnv, setGameEnv] = useState(null);
   const [dismissedInvites, setDismissedInvites] = useState({});
   const alertSeqRef = useRef(1);
@@ -292,7 +300,8 @@ export default function App() {
         outgoingRequests: state.outgoingRequests || [],
         favoriteServers: state.favoriteServers || [],
         incomingInvites: state.incomingInvites || [],
-        outgoingInvites: state.outgoingInvites || []
+        outgoingInvites: state.outgoingInvites || [],
+        unreadMessages: state.unreadMessages || {}
       });
       mergeRemoteFavorites(state.favoriteServers);
     } catch {
@@ -409,7 +418,10 @@ export default function App() {
 
   useEffect(() => {
     const resolvedUrl = resolveSocialServerUrl(settings.socialServerUrl);
-    if (!social.authenticated || !social.user?.id || !isSupabaseGatewayUrl(resolvedUrl)) return undefined;
+    if (!social.authenticated || !social.user?.id || !isSupabaseGatewayUrl(resolvedUrl)) {
+      setRealtimeAccessToken('');
+      return undefined;
+    }
     let alive = true;
     let unsubscribe = () => {};
 
@@ -417,12 +429,16 @@ export default function App() {
       try {
         const res = await fetchRealtimeToken(settings.socialServerUrl);
         if (!alive || !res?.accessToken) return;
+        setRealtimeAccessToken(res.accessToken);
         unsubscribe = subscribeSocialRealtime({
           accessToken: res.accessToken,
           userId: social.user.id,
           socialServerUrl: resolvedUrl,
           onChange: () => {
             if (alive) void refreshSocial();
+          },
+          onDirectMessage: () => {
+            if (alive) setChatRealtimeTick(t => t + 1);
           }
         });
       } catch {}
@@ -430,6 +446,7 @@ export default function App() {
 
     return () => {
       alive = false;
+      setRealtimeAccessToken('');
       unsubscribe();
     };
   }, [social.authenticated, social.user?.id, social.mode, settings.socialServerUrl, refreshSocial]);
@@ -454,7 +471,8 @@ export default function App() {
               outgoingRequests: state.outgoingRequests || [],
               favoriteServers: state.favoriteServers || prev.favoriteServers,
               incomingInvites: state.incomingInvites || [],
-              outgoingInvites: state.outgoingInvites || []
+              outgoingInvites: state.outgoingInvites || [],
+              unreadMessages: state.unreadMessages ?? prev.unreadMessages ?? {}
             }));
           }
         }
@@ -489,8 +507,11 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    const prevUserId = social.user?.id;
     await logoutAccount(settings.socialServerUrl);
+    if (prevUserId) clearUserChatCache(prevUserId);
     clearTimeout(modalTimer.current);
+    setRealtimeAccessToken('');
     setVisibleModal(null);
     setModalClosing(false);
     setSocial({ ...EMPTY_SOCIAL, loading: false });
@@ -555,7 +576,8 @@ export default function App() {
       outgoingRequests: res.outgoingRequests ?? prev.outgoingRequests,
       favoriteServers: res.favoriteServers ?? prev.favoriteServers,
       incomingInvites: res.incomingInvites ?? prev.incomingInvites,
-      outgoingInvites: res.outgoingInvites ?? prev.outgoingInvites
+      outgoingInvites: res.outgoingInvites ?? prev.outgoingInvites,
+      unreadMessages: res.unreadMessages ?? prev.unreadMessages ?? {}
     }));
   };
 
@@ -606,7 +628,7 @@ export default function App() {
       id: srv.id || crypto.randomUUID(),
       name: dirMatch?.name || srv.name || normalizedIp,
       ip: dirMatch?.address || normalizedIp,
-      tag: dirMatch?.tag || 'Roleplay',
+      tag: normalizeServerTag(dirMatch?.tag, DEFAULT_SERVER_TAG),
       patchManifestUrl: dirMatch?.patchManifestUrl || '',
       customBannerUrl: dirMatch?.customBannerUrl || '',
       directorySlug: dirMatch?.slug || '',
@@ -954,6 +976,30 @@ export default function App() {
               return res;
             }}
             onJoinFriendServer={handleJoinFriendServer}
+            onFetchChatHistory={async friendId => {
+              const res = await fetchChatHistory(friendId, settings.socialServerUrl);
+              if (res?.unreadMessages) {
+                setSocial(prev => ({ ...prev, unreadMessages: res.unreadMessages }));
+              }
+              return res;
+            }}
+            onSendChatMessage={async (friendId, body) => {
+              const res = await sendChatMessage(friendId, body, settings.socialServerUrl);
+              if (res?.unreadMessages) {
+                setSocial(prev => ({ ...prev, unreadMessages: res.unreadMessages }));
+              }
+              return res;
+            }}
+            onMarkChatRead={async friendId => {
+              const res = await markChatRead(friendId, settings.socialServerUrl);
+              if (res?.unreadMessages) {
+                setSocial(prev => ({ ...prev, unreadMessages: res.unreadMessages }));
+              }
+              return res;
+            }}
+            realtimeAccessToken={realtimeAccessToken}
+            socialServerUrl={resolveSocialServerUrl(settings.socialServerUrl)}
+            chatRealtimeTick={chatRealtimeTick}
             onRequestConfirm={requestConfirm}
           />
         </div>
