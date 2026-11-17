@@ -8,6 +8,7 @@ import MicIndicator from './MicIndicator';
 import ServerAvatar from './ServerAvatar';
 import ScreenshotsGallery from './ScreenshotsGallery';
 import PatchNewsSection from './PatchNewsSection';
+import AddonsHub from './AddonsHub';
 import { APP_VERSION } from '../shared/patcherConfig';
 import { SERVER_TAGS, DEFAULT_SERVER_TAG, normalizeServerTag } from '../shared/serverTags';
 import {
@@ -54,6 +55,12 @@ export default function MainLauncher({
   social,
   launcherUpdate,
   screenshotCaptureVersion = 0,
+  crpAddonState,
+  crpAddonBusy = false,
+  onInstallCrpAddon,
+  onUninstallCrpAddon,
+  onSaveCrpConfig,
+  onToggleCrpOverlay,
   onRequestConfirm,
   onNotify,
   busy,
@@ -93,6 +100,24 @@ export default function MainLauncher({
     return (
       <main className="main-content">
         <PatchNewsSection launcherUpdate={launcherUpdate} onOpenPatcher={onOpenPatcher} />
+      </main>
+    );
+  }
+
+  if (centerTab === 'addons') {
+    return (
+      <main className="main-content">
+        <AddonsHub
+          addonState={crpAddonState}
+          busy={crpAddonBusy}
+          settings={settings}
+          onInstallAddon={onInstallCrpAddon}
+          onUninstallAddon={onUninstallCrpAddon}
+          onSaveConfig={onSaveCrpConfig}
+          onToggleOverlayWindow={onToggleCrpOverlay}
+          onRequestConfirm={onRequestConfirm}
+          onNotify={onNotify}
+        />
       </main>
     );
   }

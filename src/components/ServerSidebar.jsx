@@ -11,6 +11,7 @@ import {
   Headphones,
   History,
   Home,
+  Layers,
   PackageCheck,
   Plus,
   Search,
@@ -118,6 +119,7 @@ export default function ServerSidebar({
   onOpenGuide,
   hasLauncherUpdate,
   social,
+  crpAddonInstalled = false,
   onOpenAuth,
   communityLinks,
   onOpenCommunityLink
@@ -283,6 +285,16 @@ export default function ServerSidebar({
               >
                 <Camera size={15} />
                 <span>คลังภาพหน้าจอ</span>
+              </button>
+              <button
+                type="button"
+                className={`rail-tool-item${centerTab === 'addons' ? ' active' : ''}`}
+                onClick={() => onChangeTab('addons')}
+                aria-label="ฟีเจอร์เสริม Add-ons"
+              >
+                <Layers size={15} />
+                <span>ฟีเจอร์เสริม</span>
+                {crpAddonInstalled && <span className="rail-tool-dot" title="ติดตั้ง FiveM C-RP-SRP Overlay แล้ว" />}
               </button>
               <button
                 type="button"

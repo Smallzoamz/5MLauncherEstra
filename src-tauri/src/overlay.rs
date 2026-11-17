@@ -39,7 +39,7 @@ impl Default for OverlaySettings {
 #[serde(rename_all = "camelCase")]
 pub struct OverlayNotificationPayload {
     pub id: String,
-    pub kind: String, // "screenshot" | "friend-online" | "friend-in-game"
+    pub kind: String, // "screenshot" | "friend-online" | "friend-in-game" | "schedule-alert"
     pub badge: String,
     pub title: String,
     pub subtitle: String,
@@ -88,6 +88,7 @@ impl OverlayManager {
             "screenshot" => cfg.notify_screenshot,
             "friend-online" => cfg.notify_friend_online,
             "friend-in-game" => cfg.notify_friend_in_game,
+            "schedule-alert" => true,
             _ => true,
         }
     }
@@ -123,7 +124,7 @@ pub fn sanitize_overlay_payload(mut payload: OverlayNotificationPayload) -> Over
         payload.id = uuid::Uuid::new_v4().to_string();
     }
     payload.kind = match payload.kind.as_str() {
-        "screenshot" | "friend-online" | "friend-in-game" => payload.kind,
+        "screenshot" | "friend-online" | "friend-in-game" | "schedule-alert" => payload.kind,
         _ => "friend-online".to_string(),
     };
     payload.badge = payload.badge.trim().chars().take(48).collect();
@@ -379,5 +380,23 @@ mod tests {
         assert!(!mgr.should_notify("screenshot"));
         assert!(mgr.should_notify("friend-online"));
         assert!(!mgr.should_notify("friend-in-game"));
+        assert!(mgr.should_notify("schedule-alert"));
+    }
+
+    #[test]
+    fn preserves_schedule_alert_kind_on_sanitize() {
+        let sanitized = sanitize_overlay_payload(OverlayNotificationPayload {
+            id: "sch-1".into(),
+            kind: "schedule-alert".into(),
+            badge: "ตารางเรียน".into(),
+            title: "วิชาดนตรี".into(),
+            subtitle: "ห้อง 204".into(),
+            detail: "20:00".into(),
+            image_url: "".into(),
+            initials: "CLS".into(),
+            accent_color: "#38bdf8".into(),
+            duration_ms: 6500,
+        });
+        assert_eq!(sanitized.kind, "schedule-alert");
     }
 }

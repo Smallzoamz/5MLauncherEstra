@@ -107,6 +107,33 @@ export function initDesktopBridge() {
         else unlisten();
       });
       return () => { active = false; unlistenFn?.(); };
+    },
+    getCrpAddonState: () => invoke('get_crp_addon_state_cmd'),
+    installCrpAddon: () => invoke('install_crp_addon_cmd'),
+    uninstallCrpAddon: () => invoke('uninstall_crp_addon_cmd'),
+    setCrpOverlayConfig: config => invoke('set_crp_overlay_config_cmd', { config }),
+    toggleCrpOverlayWindow: (visible = null) => invoke('toggle_crp_overlay_window_cmd', { visible }),
+    hideCrpOverlayWindow: () => invoke('hide_crp_overlay_window_cmd'),
+    copyTextToClipboard: text => invoke('copy_text_to_clipboard_cmd', { text }),
+    onCrpAddonState: callback => {
+      if (typeof callback !== 'function') return () => {};
+      let active = true;
+      let unlistenFn = null;
+      void listen('estra://crp-addon-state', event => { if (active) callback(event.payload); }).then(unlisten => {
+        if (active) unlistenFn = unlisten;
+        else unlisten();
+      });
+      return () => { active = false; unlistenFn?.(); };
+    },
+    onCrpScheduleFired: callback => {
+      if (typeof callback !== 'function') return () => {};
+      let active = true;
+      let unlistenFn = null;
+      void listen('estra://crp-schedule-fired', event => { if (active) callback(event.payload); }).then(unlisten => {
+        if (active) unlistenFn = unlisten;
+        else unlisten();
+      });
+      return () => { active = false; unlistenFn?.(); };
     }
   });
 }

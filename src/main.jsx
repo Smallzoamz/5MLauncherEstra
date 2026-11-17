@@ -9,7 +9,8 @@ const windowMode =
 const isOverlayWindow = windowMode === 'overlay';
 const isPerfWindow = windowMode === 'perf';
 const isClockWindow = windowMode === 'clock';
-if (window.estraWindow && !isOverlayWindow && !isPerfWindow && !isClockWindow) {
+const isCrpOverlayWindow = windowMode === 'crp-overlay';
+if (window.estraWindow && !isOverlayWindow && !isPerfWindow && !isClockWindow && !isCrpOverlayWindow) {
   document.documentElement.classList.add('desktop-app');
 }
 import React from 'react';
@@ -18,6 +19,7 @@ import App from './App';
 import OverlayApp from './components/OverlayApp';
 import PerfOverlayApp from './components/PerfOverlayApp';
 import ClockOverlayApp from './components/ClockOverlayApp';
+import CrpOverlayApp from './components/CrpOverlayApp';
 import './index.css';
 
 if (!guardState.blocked) {
@@ -29,6 +31,8 @@ if (!guardState.blocked) {
         <PerfOverlayApp desktopWindow />
       ) : isClockWindow ? (
         <ClockOverlayApp desktopWindow />
+      ) : isCrpOverlayWindow ? (
+        <CrpOverlayApp desktopWindow />
       ) : (
         <App />
       )}

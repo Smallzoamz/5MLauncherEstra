@@ -127,6 +127,15 @@ export default function Header({
           คลังภาพ
           {centerTab === 'screenshots' && <span className="nav-dot" />}
         </button>
+        <button
+          type="button"
+          className={centerTab === 'addons' ? 'active' : ''}
+          aria-pressed={centerTab === 'addons'}
+          onClick={() => onChangeTab('addons')}
+        >
+          ฟีเจอร์เสริม
+          {centerTab === 'addons' && <span className="nav-dot" />}
+        </button>
       </nav>
 
       <div className="accounts-section" data-tauri-drag-region>

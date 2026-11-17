@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Camera, Gamepad2, Sparkles } from 'lucide-react';
+import { BellRing, Camera, Gamepad2, Sparkles } from 'lucide-react';
 import { subscribeBrowserOverlay } from '../services/overlayService';
 
 const EXIT_ANIM_MS = 240;
@@ -29,6 +29,7 @@ function OverlayToastCard({ item, onExpired }) {
 
   const isShot = item.kind === 'screenshot';
   const isInGame = item.kind === 'friend-in-game';
+  const isSchedule = item.kind === 'schedule-alert';
 
   return (
     <div
@@ -49,6 +50,8 @@ function OverlayToastCard({ item, onExpired }) {
           />
         ) : isShot ? (
           <Camera size={20} />
+        ) : isSchedule ? (
+          <BellRing size={19} />
         ) : isInGame ? (
           <span>{item.initials || <Gamepad2 size={18} />}</span>
         ) : (

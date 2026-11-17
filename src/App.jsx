@@ -35,6 +35,15 @@ import {
   shouldDeliverOverlay,
   syncOverlaySettings
 } from './services/overlayService';
+import {
+  DEFAULT_CRP_CONFIG,
+  evaluateDueSchedules,
+  installCrpOverlayAddon,
+  loadCrpAddonState,
+  saveCrpOverlayConfig,
+  toggleCrpOverlayWindow,
+  uninstallCrpOverlayAddon
+} from './services/crpOverlayService';
 import { isTauriDesktop } from './services/desktopBridge';
 import OverlayApp from './components/OverlayApp';
 import { prepareLaunch } from './services/prepareLaunch';
@@ -138,6 +147,17 @@ export default function App() {
   const [presence, setPresence] = useState(presenceService.getPresence());
   const [directory, setDirectory] = useState(loadCachedServerDirectory);
   const [screenshotCaptureVersion, setScreenshotCaptureVersion] = useState(0);
+  const [crpAddonState, setCrpAddonState] = useState({
+    installed: false,
+    manifest: null,
+    config: DEFAULT_CRP_CONFIG,
+    overlayVisible: false,
+    installDir: ''
+  });
+  const [crpAddonBusy, setCrpAddonBusy] = useState(false);
+  const crpFiredKeysRef = useRef(new Set());
+  const crpAddonStateRef = useRef(crpAddonState);
+  crpAddonStateRef.current = crpAddonState;
   const friendOverlayMapRef = useRef(null);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -436,6 +456,61 @@ export default function App() {
       offError?.();
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    void loadCrpAddonState()
+      .then(state => {
+        if (active && state) setCrpAddonState(state);
+      })
+      .catch(() => {});
+
+    const offAddonState = window.estraWindow?.onCrpAddonState?.(state => {
+      if (active && state) setCrpAddonState(state);
+    });
+    const offScheduleFired = window.estraWindow?.onCrpScheduleFired?.(payload => {
+      if (!active || !payload) return;
+      if (crpAddonStateRef.current?.config?.playAlertSound !== false) {
+        playOverlayFriendChime();
+      }
+      setUiNotice({
+        message: `${payload.badge}: ${payload.title}`,
+        tone: 'notice',
+        _seq: ++alertSeqRef.current
+      });
+    });
+
+    return () => {
+      active = false;
+      offAddonState?.();
+      offScheduleFired?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isTauriDesktop()) return undefined;
+    if (!crpAddonState.installed || !crpAddonState.config?.enabled || !crpAddonState.config?.showScheduleToasts) {
+      return undefined;
+    }
+    const tick = () => {
+      const cfg = crpAddonStateRef.current?.config;
+      if (!cfg?.schedules?.length) return;
+      const { alerts, nextFired } = evaluateDueSchedules(cfg.schedules, new Date(), crpFiredKeysRef.current);
+      crpFiredKeysRef.current = nextFired;
+      for (const alert of alerts) {
+        if (cfg.playAlertSound !== false) playOverlayFriendChime();
+        void pushOverlayNotification(alert.payload, { force: false, settings: settingsRef.current }).catch(() => {});
+        setUiNotice({
+          message: `${alert.payload.badge}: ${alert.payload.title}`,
+          tone: 'notice',
+          _seq: ++alertSeqRef.current
+        });
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 10_000);
+    return () => window.clearInterval(timer);
+  }, [crpAddonState.installed, crpAddonState.config?.enabled, crpAddonState.config?.showScheduleToasts]);
 
   useEffect(() => {
     const resolvedUrl = resolveSocialServerUrl(settings.socialServerUrl);
@@ -758,6 +833,76 @@ export default function App() {
     catch { setSettings(value); setStorageError('บันทึกการตั้งค่าไม่ได้ ค่าจะใช้ได้เฉพาะรอบนี้'); }
   };
 
+  const handleInstallCrpAddon = async () => {
+    if (crpAddonBusy) return;
+    setCrpAddonBusy(true);
+    try {
+      const next = await installCrpOverlayAddon();
+      setCrpAddonState(next);
+      setUiNotice({
+        message: 'ติดตั้ง FiveM C-RP-SRP Overlay สำเร็จ! กด Alt+O เพื่อเปิด-ปิดบนหน้าจอเกมได้ทันที',
+        tone: 'notice',
+        _seq: ++alertSeqRef.current
+      });
+    } catch (err) {
+      setUiNotice({
+        message: typeof err === 'string' ? err : err?.message || 'ติดตั้งฟีเจอร์เสริมไม่สำเร็จ',
+        tone: 'error',
+        _seq: ++alertSeqRef.current
+      });
+    } finally {
+      setCrpAddonBusy(false);
+    }
+  };
+
+  const handleUninstallCrpAddon = async () => {
+    if (crpAddonBusy) return;
+    setCrpAddonBusy(true);
+    try {
+      const next = await uninstallCrpOverlayAddon();
+      setCrpAddonState(next);
+      setUiNotice({
+        message: 'ถอนการติดตั้ง FiveM C-RP-SRP Overlay เรียบร้อยแล้ว',
+        tone: 'notice',
+        _seq: ++alertSeqRef.current
+      });
+    } catch (err) {
+      setUiNotice({
+        message: typeof err === 'string' ? err : err?.message || 'ถอนการติดตั้งไม่สำเร็จ',
+        tone: 'error',
+        _seq: ++alertSeqRef.current
+      });
+    } finally {
+      setCrpAddonBusy(false);
+    }
+  };
+
+  const handleSaveCrpConfig = async nextConfig => {
+    try {
+      const next = await saveCrpOverlayConfig(nextConfig);
+      setCrpAddonState(next);
+    } catch (err) {
+      setUiNotice({
+        message: typeof err === 'string' ? err : err?.message || 'บันทึกการตั้งค่า Overlay ไม่สำเร็จ',
+        tone: 'error',
+        _seq: ++alertSeqRef.current
+      });
+    }
+  };
+
+  const handleToggleCrpOverlay = async () => {
+    try {
+      const nextVisible = await toggleCrpOverlayWindow(null);
+      setCrpAddonState(prev => ({ ...prev, overlayVisible: Boolean(nextVisible) }));
+    } catch (err) {
+      setUiNotice({
+        message: typeof err === 'string' ? err : err?.message || 'ไม่สามารถเปิด-ปิดหน้าต่าง Overlay ได้',
+        tone: 'error',
+        _seq: ++alertSeqRef.current
+      });
+    }
+  };
+
   const floatingAlerts = [];
   if (social.authenticated && social.user?.mustChangePassword && !dismissedAlerts[`must-chpw:${social.user.id}`]) {
     floatingAlerts.push({
@@ -894,6 +1039,7 @@ export default function App() {
             onOpenGuide={handleOpenGuide}
             hasLauncherUpdate={!!launcherUpdate?.available}
             social={social}
+            crpAddonInstalled={Boolean(crpAddonState?.installed)}
             onOpenAuth={openAccountModal}
             communityLinks={communityLinks}
             onOpenCommunityLink={handleOpenCommunityLink}
@@ -945,6 +1091,12 @@ export default function App() {
               social={social}
               launcherUpdate={launcherUpdate}
               screenshotCaptureVersion={screenshotCaptureVersion}
+              crpAddonState={crpAddonState}
+              crpAddonBusy={crpAddonBusy}
+              onInstallCrpAddon={handleInstallCrpAddon}
+              onUninstallCrpAddon={handleUninstallCrpAddon}
+              onSaveCrpConfig={handleSaveCrpConfig}
+              onToggleCrpOverlay={handleToggleCrpOverlay}
               onRequestConfirm={requestConfirm}
               onNotify={(message, tone = 'notice') => setUiNotice({ message, tone, _seq: ++alertSeqRef.current })}
             />

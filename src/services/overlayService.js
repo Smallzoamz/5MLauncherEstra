@@ -21,6 +21,7 @@ export function syncOverlaySettings(settings) {
 
 export function shouldDeliverOverlay(settings, kind, force = false) {
   if (force) return true;
+  if (kind === 'schedule-alert') return settings?.overlayNotificationsEnabled !== false;
   if (settings?.overlayNotificationsEnabled === false) return false;
   if (kind === 'screenshot') return settings?.overlayNotifyScreenshot !== false;
   if (kind === 'friend-online') return settings?.overlayNotifyFriendOnline !== false;

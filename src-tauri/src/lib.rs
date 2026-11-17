@@ -1,3 +1,4 @@
+pub mod crp_overlay;
 pub mod file_safety;
 pub mod fivem;
 pub mod maintenance;
@@ -12,6 +13,9 @@ pub mod session;
 pub mod social;
 pub mod startup;
 
+use crate::crp_overlay::{
+    copy_text_to_clipboard_native, CrpAddonState, CrpOverlayConfig, CrpOverlayManager,
+};
 use crate::fivem::{
     detect_game_environment, execute_real_clean_cache, install_fivem_bootstrap, query_live_server,
     resolve_installation, CleanCacheResult, FiveMInstallation, GameEnvironmentReport,
@@ -63,6 +67,7 @@ pub struct AppState {
     pub screenshots: ScreenshotManager,
     pub overlay: OverlayManager,
     pub perf_overlay: PerfOverlayManager,
+    pub crp_overlay: CrpOverlayManager,
 }
 
 impl Default for AppState {
@@ -77,6 +82,7 @@ impl Default for AppState {
             screenshots: ScreenshotManager::default(),
             overlay: OverlayManager::default(),
             perf_overlay: PerfOverlayManager::default(),
+            crp_overlay: CrpOverlayManager::default(),
         }
     }
 }
@@ -528,6 +534,87 @@ fn get_clock_overlay_state_cmd(
     Ok(state.perf_overlay.snapshot_clock_state())
 }
 
+#[tauri::command]
+fn get_crp_addon_state_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<CrpAddonState, String> {
+    crate::security::verify_ipc_caller(&webview, true)?;
+    Ok(state.crp_overlay.snapshot_state(Some(&app)))
+}
+
+#[tauri::command]
+async fn install_crp_addon_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<CrpAddonState, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    let _guard = state
+        .mutation_lock
+        .try_lock()
+        .map_err(|_| "มีคำสั่งกำลังทำงาน กรุณารอสักครู่".to_string())?;
+    state.crp_overlay.install(&app, state.overlay.clone())
+}
+
+#[tauri::command]
+async fn uninstall_crp_addon_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<CrpAddonState, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    let _guard = state
+        .mutation_lock
+        .try_lock()
+        .map_err(|_| "มีคำสั่งกำลังทำงาน กรุณารอสักครู่".to_string())?;
+    state.crp_overlay.uninstall(&app)
+}
+
+#[tauri::command]
+fn set_crp_overlay_config_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    config: CrpOverlayConfig,
+) -> Result<CrpAddonState, String> {
+    crate::security::verify_ipc_caller(&webview, true)?;
+    state
+        .crp_overlay
+        .update_config(&app, state.overlay.clone(), config)
+}
+
+#[tauri::command]
+fn toggle_crp_overlay_window_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    visible: Option<bool>,
+) -> Result<bool, String> {
+    crate::security::verify_ipc_caller(&webview, true)?;
+    state.crp_overlay.toggle_overlay(&app, visible)
+}
+
+#[tauri::command]
+fn hide_crp_overlay_window_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    crate::security::verify_ipc_caller(&webview, true)?;
+    state.crp_overlay.toggle_overlay(&app, Some(false))
+}
+
+#[tauri::command]
+fn copy_text_to_clipboard_cmd(
+    webview: tauri::Webview,
+    text: String,
+) -> Result<(), String> {
+    crate::security::verify_ipc_caller(&webview, true)?;
+    copy_text_to_clipboard_native(&text)
+}
+
 pub fn run() {
     let startup_args: Vec<String> = std::env::args().collect();
     let launched_autostart = is_autostart_arg(&startup_args);
@@ -641,6 +728,9 @@ pub fn run() {
             let _ = ensure_perf_overlay_window(&app.handle());
             let _ = ensure_clock_overlay_window(&app.handle());
             let app_state = app.state::<AppState>();
+            app_state
+                .crp_overlay
+                .init_from_disk(&app.handle(), app_state.overlay.clone());
             start_hotkey_listener(
                 app.handle().clone(),
                 app_state.screenshots.clone(),
@@ -688,6 +778,13 @@ pub fn run() {
             get_perf_metrics_snapshot_cmd,
             set_clock_overlay_settings_cmd,
             get_clock_overlay_state_cmd,
+            get_crp_addon_state_cmd,
+            install_crp_addon_cmd,
+            uninstall_crp_addon_cmd,
+            set_crp_overlay_config_cmd,
+            toggle_crp_overlay_window_cmd,
+            hide_crp_overlay_window_cmd,
+            copy_text_to_clipboard_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Estra FiveM Launcher");
