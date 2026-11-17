@@ -23,11 +23,21 @@ const CONFIG_FILE: &str = "config.json";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceAddonManifest {
+    #[serde(default = "default_voice_id")]
     pub id: String,
+    #[serde(default = "default_voice_ver")]
     pub version: String,
+    #[serde(default)]
     pub installed_at: u64,
     #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+fn default_voice_id() -> String {
+    VOICE_ADDON_ID.to_string()
+}
+fn default_voice_ver() -> String {
+    VOICE_ADDON_VERSION.to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -331,11 +341,7 @@ pub fn resolve_voice_addon_dir_from_base(base: &Path) -> Result<PathBuf, String>
 }
 
 fn resolve_voice_addon_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let base = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| format!("ไม่สามารถระบุโฟลเดอร์โปรแกรมได้: {e}"))?;
-    resolve_voice_addon_dir_from_base(&base)
+    crate::crp_overlay::resolve_persistent_addon_dir(app, VOICE_ADDON_ID)
 }
 
 fn atomic_write_json<T: Serialize>(dir: &Path, filename: &str, value: &T) -> Result<(), String> {
@@ -398,9 +404,20 @@ pub fn install_voice_addon_in_dir(
         installed_at: now_ms,
         enabled: true,
     };
-    let config = VoiceNoteConfig::default();
+    let cfg_path = normalize_win_path(&dir.join(CONFIG_FILE));
+    let config = if cfg_path.is_file() && assert_no_links(&cfg_path).is_ok() {
+        fs::read_to_string(&cfg_path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<VoiceNoteConfig>(&s).ok())
+            .map(sanitize_voice_config)
+            .unwrap_or_default()
+    } else {
+        VoiceNoteConfig::default()
+    };
     atomic_write_json(dir, MANIFEST_FILE, &manifest)?;
-    atomic_write_json(dir, CONFIG_FILE, &config)?;
+    if !cfg_path.is_file() {
+        atomic_write_json(dir, CONFIG_FILE, &config)?;
+    }
     Ok((manifest, config))
 }
 
@@ -696,6 +713,7 @@ impl VoiceNoteManager {
 
         let dir = resolve_voice_addon_dir(app)?;
         uninstall_voice_addon_in_dir(&dir)?;
+        crate::crp_overlay::cleanup_legacy_addon_dirs(app, &dir, VOICE_ADDON_ID);
         if let Ok(mut guard) = self.manifest.lock() {
             *guard = None;
         }
@@ -945,30 +963,41 @@ pub async fn download_local_whisper_runtime(
                 message: "กำลังตรวจสอบเวอร์ชันล่าสุดของ whisper.cpp...".into(),
             },
         );
-        let rel_json: serde_json::Value = client
-            .get("https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest")
+        const FALLBACK_WHISPER_BIN_URL: &str =
+            "https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-x64.zip";
+
+        let mut asset_url: Option<String> = None;
+        if let Ok(resp) = client
+            .get("https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=20")
             .header("User-Agent", "Estra-FiveM-Launcher")
             .send()
             .await
-            .map_err(|e| format!("ตรวจสอบ GitHub Release ไม่สำเร็จ: {e}"))?
-            .json()
-            .await
-            .map_err(|e| format!("อ่านข้อมูล Release ไม่สำเร็จ: {e}"))?;
-
-        let assets = rel_json["assets"]
-            .as_array()
-            .ok_or_else(|| "ไม่พบรายการไฟล์ใน whisper.cpp release".to_string())?;
-        let asset_url = assets
-            .iter()
-            .find_map(|a| {
-                let name = a["name"].as_str()?;
-                if name.eq_ignore_ascii_case("whisper-bin-x64.zip") {
-                    a["browser_download_url"].as_str().map(String::from)
-                } else {
-                    None
+        {
+            if resp.status().is_success() {
+                if let Ok(releases) = resp.json::<Vec<serde_json::Value>>().await {
+                    for rel in releases {
+                        if rel["draft"].as_bool().unwrap_or(false) {
+                            continue;
+                        }
+                        if let Some(assets) = rel["assets"].as_array() {
+                            if let Some(found) = assets.iter().find_map(|a| {
+                                let name = a["name"].as_str()?;
+                                if name.eq_ignore_ascii_case("whisper-bin-x64.zip") {
+                                    a["browser_download_url"].as_str().map(String::from)
+                                } else {
+                                    None
+                                }
+                            }) {
+                                asset_url = Some(found);
+                                break;
+                            }
+                        }
+                    }
                 }
-            })
-            .ok_or_else(|| "ไม่พบไฟล์ whisper-bin-x64.zip สำหรับ Windows x64".to_string())?;
+            }
+        }
+
+        let asset_url = asset_url.unwrap_or_else(|| FALLBACK_WHISPER_BIN_URL.to_string());
 
         let zip_path = bin_dir.join("whisper-bin-x64.zip");
         download_to_file_with_progress(
@@ -1964,6 +1993,19 @@ mod tests {
         assert!(installed_now);
         assert_eq!(loaded_man.unwrap().version, VOICE_ADDON_VERSION);
         assert!(loaded_cfg.corrections.len() >= 3);
+
+        // Reinstall preserves existing config and migration copies safely
+        let mut custom = loaded_cfg.clone();
+        custom.audio_source = "mic".into();
+        atomic_write_json(&dir, CONFIG_FILE, &custom).unwrap();
+        let (_, reinstalled_cfg) = install_voice_addon_in_dir(&dir).unwrap();
+        assert_eq!(reinstalled_cfg.audio_source, "mic");
+
+        let migrated_dir = resolve_voice_addon_dir_from_base(&base.join("migrated")).unwrap();
+        crate::crp_overlay::copy_dir_recursive_no_links(&dir, &migrated_dir).unwrap();
+        let (mig_ok, _, mig_cfg) = load_voice_addon_from_dir(&migrated_dir).unwrap();
+        assert!(mig_ok);
+        assert_eq!(mig_cfg.audio_source, "mic");
 
         uninstall_voice_addon_in_dir(&dir).unwrap();
         assert!(!dir.exists());

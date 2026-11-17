@@ -514,6 +514,24 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (screenStage !== 'launcher' && centerTab !== 'addons') return;
+    let active = true;
+    void loadCrpAddonState()
+      .then(state => {
+        if (active && state) setCrpAddonState(state);
+      })
+      .catch(() => {});
+    void loadVoiceNoteState()
+      .then(state => {
+        if (active && state) setVoiceNoteState(state);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [screenStage, centerTab]);
+
+  useEffect(() => {
     let active = true;
     void loadVoiceNoteState()
       .then(state => {

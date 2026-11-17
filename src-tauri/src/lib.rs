@@ -547,6 +547,11 @@ fn get_crp_addon_state_cmd(
     state: State<'_, AppState>,
 ) -> Result<CrpAddonState, String> {
     crate::security::verify_ipc_caller(&webview, true)?;
+    if !state.crp_overlay.is_installed() {
+        state
+            .crp_overlay
+            .init_from_disk(&app, state.overlay.clone());
+    }
     Ok(state.crp_overlay.snapshot_state(Some(&app)))
 }
 
@@ -628,6 +633,9 @@ fn get_voice_note_state_cmd(
     state: State<'_, AppState>,
 ) -> Result<VoiceAddonState, String> {
     crate::security::verify_ipc_caller(&webview, true)?;
+    if !state.voice_note.is_installed() {
+        state.voice_note.init_from_disk(&app);
+    }
     Ok(state.voice_note.snapshot_state(Some(&app)))
 }
 

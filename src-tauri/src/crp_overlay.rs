@@ -22,11 +22,21 @@ const CONFIG_FILE: &str = "config.json";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CrpAddonManifest {
+    #[serde(default = "default_crp_id")]
     pub id: String,
+    #[serde(default = "default_crp_ver")]
     pub version: String,
+    #[serde(default)]
     pub installed_at: u64,
     #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+fn default_crp_id() -> String {
+    CRP_ADDON_ID.to_string()
+}
+fn default_crp_ver() -> String {
+    CRP_ADDON_VERSION.to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -351,6 +361,104 @@ pub fn sanitize_crp_config(mut cfg: CrpOverlayConfig) -> CrpOverlayConfig {
     cfg
 }
 
+pub fn is_drive_c_path(path: &Path) -> bool {
+    let raw = normalize_win_path(path).to_string_lossy().to_string();
+    let trimmed = raw
+        .strip_prefix(r"\\?\")
+        .or_else(|| raw.strip_prefix("//?/"))
+        .unwrap_or(&raw);
+    let bytes = trimmed.as_bytes();
+    bytes.len() >= 2
+        && bytes[0].eq_ignore_ascii_case(&b'C')
+        && bytes[1] == b':'
+        && (bytes.len() == 2 || bytes[2] == b'\\' || bytes[2] == b'/')
+}
+
+fn is_dir_writable_no_links(dir: &Path) -> bool {
+    if assert_no_links(dir).is_err() {
+        return false;
+    }
+    let existed = dir.exists();
+    if !existed && fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    if assert_no_links(dir).is_err() {
+        return false;
+    }
+    let probe = normalize_win_path(&dir.join(format!(".estra_probe_{}", std::process::id())));
+    if assert_within(dir, &probe).is_err() {
+        return false;
+    }
+    let ok = fs::write(&probe, b"ok").is_ok();
+    let _ = fs::remove_file(&probe);
+    if !ok && !existed {
+        let _ = fs::remove_dir(dir);
+    }
+    ok
+}
+
+pub fn choose_addons_root_from(
+    exe_dir: Option<&Path>,
+    non_c_drives: &[PathBuf],
+    fallback_local_data: Option<&Path>,
+) -> Result<PathBuf, String> {
+    // 1. Prefer <launcher_exe_dir>\addons when the launcher is NOT on Drive C: and is writable.
+    if let Some(ed) = exe_dir {
+        let ed_norm = normalize_win_path(ed);
+        if !is_drive_c_path(&ed_norm) {
+            let exe_addons = normalize_win_path(&ed_norm.join("addons"));
+            if is_dir_writable_no_links(&exe_addons) {
+                return Ok(exe_addons);
+            }
+        }
+    }
+
+    // 2. If launcher is on Drive C: (or exe_dir is read-only), place add-ons & models on a non-C: drive.
+    //    Prefer a non-C: EstraFiveM\addons folder that already exists first, then any writable non-C: drive.
+    for drv in non_c_drives {
+        let drv_norm = normalize_win_path(drv);
+        if is_drive_c_path(&drv_norm) {
+            continue;
+        }
+        let cand = normalize_win_path(&drv_norm.join("EstraFiveM").join("addons"));
+        if cand.is_dir() && is_dir_writable_no_links(&cand) {
+            return Ok(cand);
+        }
+    }
+    for drv in non_c_drives {
+        let drv_norm = normalize_win_path(drv);
+        if is_drive_c_path(&drv_norm) {
+            continue;
+        }
+        let cand = normalize_win_path(&drv_norm.join("EstraFiveM").join("addons"));
+        if is_dir_writable_no_links(&cand) {
+            return Ok(cand);
+        }
+    }
+
+    // 3. Last resort only when no other drive exists on the machine.
+    if let Some(ed) = exe_dir {
+        let exe_addons = normalize_win_path(&ed.join("addons"));
+        if is_dir_writable_no_links(&exe_addons) {
+            return Ok(exe_addons);
+        }
+    }
+    if let Some(local) = fallback_local_data {
+        let local_addons = normalize_win_path(&local.join("addons"));
+        assert_no_links(&local_addons)?;
+        return Ok(local_addons);
+    }
+
+    Err("ไม่สามารถระบุโฟลเดอร์สำหรับติดตั้ง Add-ons ได้".to_string())
+}
+
+fn available_non_c_drives() -> Vec<PathBuf> {
+    ('D'..='Z')
+        .map(|letter| PathBuf::from(format!("{letter}:\\")))
+        .filter(|p| p.exists())
+        .collect()
+}
+
 pub fn resolve_addon_dir_from_base(base: &Path) -> Result<PathBuf, String> {
     let addons_root = normalize_win_path(&base.join("addons"));
     let target = normalize_win_path(&addons_root.join(CRP_ADDON_ID));
@@ -359,12 +467,103 @@ pub fn resolve_addon_dir_from_base(base: &Path) -> Result<PathBuf, String> {
     Ok(target)
 }
 
+pub fn copy_dir_recursive_no_links(src: &Path, dst: &Path) -> Result<(), String> {
+    assert_no_links(src)?;
+    assert_no_links(dst)?;
+    fs::create_dir_all(dst).map_err(|e| format!("สร้างโฟลเดอร์ปลายทางไม่สำเร็จ: {e}"))?;
+    for entry in fs::read_dir(src).map_err(|e| format!("อ่านโฟลเดอร์เดิมไม่สำเร็จ: {e}"))? {
+        let entry = entry.map_err(|e| format!("อ่านรายการไฟล์ไม่สำเร็จ: {e}"))?;
+        let src_path = normalize_win_path(&entry.path());
+        let meta = fs::symlink_metadata(&src_path)
+            .map_err(|e| format!("ตรวจสอบไฟล์เดิมไม่สำเร็จ: {e}"))?;
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        let dst_path = normalize_win_path(&dst.join(entry.file_name()));
+        assert_within(dst, &dst_path)?;
+        if meta.is_dir() {
+            copy_dir_recursive_no_links(&src_path, &dst_path)?;
+        } else if meta.is_file() && !dst_path.exists() {
+            let _ = fs::copy(&src_path, &dst_path);
+        }
+    }
+    Ok(())
+}
+
+fn legacy_addon_candidates(app: &AppHandle, addon_id: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            out.push(normalize_win_path(&parent.join("addons").join(addon_id)));
+        }
+    }
+    for drv in available_non_c_drives() {
+        out.push(normalize_win_path(
+            &drv.join("EstraFiveM").join("addons").join(addon_id),
+        ));
+    }
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        out.push(normalize_win_path(
+            &PathBuf::from(local)
+                .join("EstraFiveMLauncher")
+                .join("addons")
+                .join(addon_id),
+        ));
+    }
+    if let Ok(app_local) = app.path().app_local_data_dir() {
+        out.push(normalize_win_path(&app_local.join("addons").join(addon_id)));
+    }
+    out
+}
+
+pub fn resolve_persistent_addon_dir(app: &AppHandle, addon_id: &str) -> Result<PathBuf, String> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    let non_c = available_non_c_drives();
+    let app_local = app.path().app_local_data_dir().ok();
+    let addons_root = choose_addons_root_from(exe_dir.as_deref(), &non_c, app_local.as_deref())?;
+    let target = normalize_win_path(&addons_root.join(addon_id));
+    assert_within(&addons_root, &target)?;
+    assert_no_links(&target)?;
+
+    let candidates = legacy_addon_candidates(app, addon_id);
+    if !target.join(MANIFEST_FILE).is_file() {
+        for legacy_dir in &candidates {
+            if legacy_dir != &target && legacy_dir.join(MANIFEST_FILE).is_file() {
+                if copy_dir_recursive_no_links(legacy_dir, &target).is_ok()
+                    && target.join(MANIFEST_FILE).is_file()
+                {
+                    if is_drive_c_path(legacy_dir) && !is_drive_c_path(&target) {
+                        let _ = uninstall_addon_in_dir(legacy_dir);
+                    }
+                    break;
+                }
+            }
+        }
+    } else if !is_drive_c_path(&target) {
+        // Ensure any leftover Drive C: add-on/model copies are removed once non-C: target is verified.
+        for legacy_dir in &candidates {
+            if legacy_dir != &target && is_drive_c_path(legacy_dir) && legacy_dir.exists() {
+                let _ = uninstall_addon_in_dir(legacy_dir);
+            }
+        }
+    }
+
+    Ok(target)
+}
+
+pub fn cleanup_legacy_addon_dirs(app: &AppHandle, current_dir: &Path, addon_id: &str) {
+    let current_norm = normalize_win_path(current_dir);
+    for cand in legacy_addon_candidates(app, addon_id) {
+        if cand != current_norm && cand.exists() {
+            let _ = uninstall_addon_in_dir(&cand);
+        }
+    }
+}
+
 fn resolve_addon_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let base = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| format!("ไม่สามารถระบุโฟลเดอร์โปรแกรมได้: {e}"))?;
-    resolve_addon_dir_from_base(&base)
+    resolve_persistent_addon_dir(app, CRP_ADDON_ID)
 }
 
 fn atomic_write_json<T: Serialize>(dir: &Path, filename: &str, value: &T) -> Result<(), String> {
@@ -423,9 +622,20 @@ pub fn install_addon_in_dir(dir: &Path) -> Result<(CrpAddonManifest, CrpOverlayC
         installed_at: now_ms,
         enabled: true,
     };
-    let config = CrpOverlayConfig::default();
+    let config_path = normalize_win_path(&dir.join(CONFIG_FILE));
+    let config = if config_path.is_file() && assert_no_links(&config_path).is_ok() {
+        fs::read_to_string(&config_path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<CrpOverlayConfig>(&s).ok())
+            .map(sanitize_crp_config)
+            .unwrap_or_default()
+    } else {
+        CrpOverlayConfig::default()
+    };
     atomic_write_json(dir, MANIFEST_FILE, &manifest)?;
-    atomic_write_json(dir, CONFIG_FILE, &config)?;
+    if !config_path.is_file() {
+        atomic_write_json(dir, CONFIG_FILE, &config)?;
+    }
     Ok((manifest, config))
 }
 
@@ -741,6 +951,7 @@ impl CrpOverlayManager {
 
         let dir = resolve_addon_dir(app)?;
         uninstall_addon_in_dir(&dir)?;
+        cleanup_legacy_addon_dirs(app, &dir, CRP_ADDON_ID);
         if let Ok(mut guard) = self.manifest.lock() {
             *guard = None;
         }
@@ -1233,6 +1444,19 @@ mod tests {
         assert_eq!(loaded_man.unwrap().version, CRP_ADDON_VERSION);
         assert_eq!(loaded_cfg.roll_count, 4);
 
+        // Saving custom config and reinstalling preserves existing config & migrates cleanly
+        let mut custom = loaded_cfg.clone();
+        custom.roll_count = 7;
+        atomic_write_json(&dir, CONFIG_FILE, &custom).unwrap();
+        let (_, reinstalled_cfg) = install_addon_in_dir(&dir).unwrap();
+        assert_eq!(reinstalled_cfg.roll_count, 7);
+
+        let migrated_dir = resolve_addon_dir_from_base(&base.join("migrated")).unwrap();
+        copy_dir_recursive_no_links(&dir, &migrated_dir).unwrap();
+        let (mig_ok, _, mig_cfg) = load_addon_from_dir(&migrated_dir).unwrap();
+        assert!(mig_ok);
+        assert_eq!(mig_cfg.roll_count, 7);
+
         uninstall_addon_in_dir(&dir).unwrap();
         assert!(!dir.exists());
         let _ = fs::remove_dir_all(&base);
@@ -1286,5 +1510,52 @@ mod tests {
         let start_alerts = evaluate_due_schedules(&schedules, mon_start, &mut fired);
         assert_eq!(start_alerts.len(), 1);
         assert!(start_alerts[0].badge.contains("ถึงเวลาแล้ว"));
+    }
+
+    #[test]
+    fn avoids_drive_c_and_prefers_launcher_dir_addons() {
+        assert!(is_drive_c_path(Path::new(r"C:\Program Files\Estra")));
+        assert!(is_drive_c_path(Path::new(r"c:\Users\Venge\AppData\Local")));
+        assert!(is_drive_c_path(Path::new(r"\\?\C:\Estra")));
+        assert!(!is_drive_c_path(Path::new(r"F:\5MLauncher")));
+        assert!(!is_drive_c_path(Path::new(r"D:\EstraFiveM")));
+
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("estra_choose_root_{stamp}"));
+        let non_c_exe = root.join("launcher_non_c");
+        let non_c_drv = root.join("drive_f");
+        let fallback_c = PathBuf::from(r"C:\Users\Venge\AppData\Local\EstraTestFallback");
+        fs::create_dir_all(&non_c_exe).unwrap();
+        fs::create_dir_all(&non_c_drv).unwrap();
+
+        // When temp dir isn't on C:, choose_addons_root_from uses <exe_dir>\addons directly.
+        // On Windows CI/local where std::env::temp_dir() may be on C:\, test the Drive-C exe skip explicitly:
+        let c_exe = PathBuf::from(r"C:\Program Files\EstraLauncher");
+        if !is_drive_c_path(&root) {
+            let chosen = choose_addons_root_from(
+                Some(&non_c_exe),
+                std::slice::from_ref(&non_c_drv),
+                Some(&fallback_c),
+            )
+            .unwrap();
+            assert_eq!(chosen, normalize_win_path(&non_c_exe.join("addons")));
+
+            let chosen_when_exe_on_c = choose_addons_root_from(
+                Some(&c_exe),
+                std::slice::from_ref(&non_c_drv),
+                Some(&fallback_c),
+            )
+            .unwrap();
+            assert_eq!(
+                chosen_when_exe_on_c,
+                normalize_win_path(&non_c_drv.join("EstraFiveM").join("addons"))
+            );
+        } else {
+            // Even when running from temp on C:\, verify fallback order works cleanly without panic
+            let chosen = choose_addons_root_from(Some(&c_exe), &[], Some(&root)).unwrap();
+            assert_eq!(chosen, normalize_win_path(&root.join("addons")));
+        }
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
