@@ -161,7 +161,11 @@ pub fn is_re_module_name(module_name: &str) -> bool {
 
 pub fn is_allowed_webview_label(label: &str, allow_overlay: bool) -> bool {
     label == "main"
-        || (allow_overlay && matches!(label, "overlay" | "perf-overlay" | "clock-overlay" | "crp-overlay"))
+        || (allow_overlay
+            && matches!(
+                label,
+                "overlay" | "perf-overlay" | "clock-overlay" | "crp-overlay" | "voice-note-overlay"
+            ))
 }
 
 pub fn is_allowed_webview_url(url: &Url, is_release: bool) -> bool {
@@ -636,6 +640,8 @@ mod tests {
         assert!(is_allowed_webview_label("overlay", true));
         assert!(is_allowed_webview_label("crp-overlay", true));
         assert!(!is_allowed_webview_label("crp-overlay", false));
+        assert!(is_allowed_webview_label("voice-note-overlay", true));
+        assert!(!is_allowed_webview_label("voice-note-overlay", false));
         assert!(!is_allowed_webview_label("untrusted", true));
     }
 

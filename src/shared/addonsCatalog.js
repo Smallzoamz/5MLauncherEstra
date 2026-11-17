@@ -1,4 +1,5 @@
 export const CRP_OVERLAY_ADDON_ID = 'fivem-crp-srp-overlay';
+export const VOICE_NOTE_ADDON_ID = 'voice-to-note';
 
 export const ADDONS_CATALOG = [
   {
@@ -18,6 +19,24 @@ export const ADDONS_CATALOG = [
       'หน้าต่าง Overlay ลอยบนจอ กดคีย์ลัดเปิด-ปิดได้ทันทีขณะเล่น FiveM (Windowed / Borderless)'
     ],
     defaultHotkey: 'Alt+O'
+  },
+  {
+    id: VOICE_NOTE_ADDON_ID,
+    name: 'Voice To Note',
+    shortName: 'Voice To Note',
+    version: '1.0.0',
+    author: 'Estra Studio',
+    category: 'Audio & RP Notes',
+    tagline: 'จับเสียงพูดภายในเกม FiveM แปลงเป็นข้อความโน้ต พร้อมระบบ Word Suggestion แก้คำเพี้ยนอัตโนมัติ',
+    description:
+      'ฟีเจอร์เสริมแบบติดตั้ง/ถอนการติดตั้งได้แยกต่างหาก สำหรับดักจับเสียงพูดภายในเกม FiveM (ผ่าน WASAPI Loopback ปลอดภัย 100% ไม่แตะไฟล์เกม) แปลงเป็นข้อความโน้ตอัตโนมัติ พร้อมระบบแนะนำคำแก้คำเพี้ยน (Word Suggestion) และคลังศัพท์ RP ส่วนตัว',
+    highlights: [
+      'จับเสียงเฉพาะจากเกม FiveM (Windows Process Loopback) หรือเสียงระบบ/ไมโครโฟน โดยไม่ยุ่งกับ Memory ของเกม',
+      'รองรับทั้งโหมด Cloud Whisper API (Groq / OpenAI / Custom — ไม่กิน FPS เกม) และ Local Whisper ฟรีในเครื่อง',
+      'ระบบ Word Suggestion เทียบเสียงอ่านภาษาไทย + คลังศัพท์ RP ให้คลิกแก้คำเพี้ยนในโน้ตได้ใน 1 คลิก',
+      'จดจำคู่คำแก้ไข (Auto-Learn) เพื่อช่วยแก้คำที่เพี้ยนบ่อยให้อัตโนมัติ พร้อมหน้าต่าง Overlay ลอยดูโน้ตระหว่างเล่น'
+    ],
+    defaultHotkey: 'Alt+V'
   }
 ];
 

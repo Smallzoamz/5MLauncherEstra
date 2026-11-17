@@ -8,6 +8,7 @@ import {
   Download,
   Edit3,
   Layers,
+  Mic,
   Minus,
   Music,
   Play,
@@ -21,7 +22,8 @@ import {
   Trash2,
   Wrench
 } from 'lucide-react';
-import { getAddonCatalogEntry } from '../shared/addonsCatalog';
+import { ADDONS_CATALOG, CRP_OVERLAY_ADDON_ID, VOICE_NOTE_ADDON_ID, getAddonCatalogEntry } from '../shared/addonsCatalog';
+import VoiceToNotePanel from './VoiceToNotePanel';
 import {
   COMMAND_CATEGORIES,
   CRP_OVERLAY_HOTKEYS,
@@ -83,11 +85,24 @@ export default function AddonsHub({
   onUninstallAddon,
   onSaveConfig,
   onToggleOverlayWindow,
+  voiceState,
+  voiceMeter,
+  voiceDownloadProgress,
+  voiceBusy = false,
+  onInstallVoiceAddon,
+  onUninstallVoiceAddon,
+  onSaveVoiceConfig,
+  onStartVoiceCapture,
+  onStopVoiceCapture,
+  onDownloadLocalWhisper,
+  onToggleVoiceOverlay,
   onRequestConfirm,
   onNotify
 }) {
   const desktop = isTauriDesktop();
-  const catalog = getAddonCatalogEntry();
+  const [selectedAddonId, setSelectedAddonId] = useState(CRP_OVERLAY_ADDON_ID);
+  const catalog = getAddonCatalogEntry(CRP_OVERLAY_ADDON_ID);
+  const voiceInstalled = Boolean(voiceState?.installed);
   const installed = Boolean(addonState?.installed);
   const config = addonState?.config;
   const [subTab, setSubTab] = useState('commands');
@@ -309,18 +324,20 @@ export default function AddonsHub({
       <div className="subtab-banner addons-banner">
         <div className="addons-banner-copy">
           <div className="screenshots-eyebrow-row">
-            <span className="eyebrow">ESTRA ADD-ONS · MODULAR EXTENSION</span>
-            <span className={`addon-status-pill${installed ? ' installed' : ''}`}>
-              {installed ? `ติดตั้งแล้ว · v${catalog?.version || '1.0.0'}` : 'พร้อมติดตั้งผ่าน Launcher'}
+            <span className="eyebrow">ESTRA ADD-ONS · MODULAR EXTENSIONS</span>
+            <span className={`addon-status-pill${selectedAddonId === VOICE_NOTE_ADDON_ID ? (voiceInstalled ? ' installed' : '') : (installed ? ' installed' : '')}`}>
+              {selectedAddonId === VOICE_NOTE_ADDON_ID
+                ? (voiceInstalled ? 'Voice To Note · ติดตั้งแล้ว v1.0.0' : 'Voice To Note · พร้อมติดตั้ง')
+                : (installed ? `C-RP-SRP Overlay · ติดตั้งแล้ว v${catalog?.version || '1.0.0'}` : 'C-RP-SRP Overlay · พร้อมติดตั้ง')}
             </span>
           </div>
           <h2>ฟีเจอร์เสริม (Add-ons)</h2>
           <p>
-            ติดตั้งหรือถอนการติดตั้งเครื่องมือเสริมสำหรับสาย Roleplay ได้โดยตรงผ่าน Estra Launcher โดยไม่กระทบไฟล์เกม FiveM
+            ติดตั้งหรือถอนการติดตั้งเครื่องมือเสริมแต่ละตัวแยกกันได้โดยตรงผ่าน Estra Launcher โดยไม่กระทบไฟล์เกม FiveM
           </p>
         </div>
 
-        {installed && (
+        {selectedAddonId === CRP_OVERLAY_ADDON_ID && installed && (
           <div className="addons-banner-actions">
             <button
               type="button"
@@ -354,7 +371,54 @@ export default function AddonsHub({
         )}
       </div>
 
-      {!installed ? (
+      <div className="addons-selector-grid" role="tablist" aria-label="เลือกฟีเจอร์เสริม">
+        {ADDONS_CATALOG.map(entry => {
+          const isVoice = entry.id === VOICE_NOTE_ADDON_ID;
+          const isInstalledEntry = isVoice ? voiceInstalled : installed;
+          const isActive = selectedAddonId === entry.id;
+          return (
+            <button
+              key={entry.id}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              className={`addon-selector-card${isActive ? ' active' : ''}`}
+              onClick={() => setSelectedAddonId(entry.id)}
+            >
+              <div className="addon-selector-icon">
+                {isVoice ? <Mic size={18} /> : <Layers size={18} />}
+              </div>
+              <div className="addon-selector-copy">
+                <div className="addon-selector-title">
+                  <strong>{entry.name}</strong>
+                  <span className={`addon-status-pill${isInstalledEntry ? ' installed' : ''}`}>
+                    {isInstalledEntry ? 'ติดตั้งแล้ว' : 'ยังไม่ติดตั้ง'}
+                  </span>
+                </div>
+                <small>{entry.tagline}</small>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {selectedAddonId === VOICE_NOTE_ADDON_ID ? (
+        <VoiceToNotePanel
+          voiceState={voiceState}
+          meter={voiceMeter}
+          downloadProgress={voiceDownloadProgress}
+          busy={voiceBusy}
+          onInstall={onInstallVoiceAddon}
+          onUninstall={onUninstallVoiceAddon}
+          onSaveConfig={onSaveVoiceConfig}
+          onStartCapture={onStartVoiceCapture}
+          onStopCapture={onStopVoiceCapture}
+          onDownloadLocalWhisper={onDownloadLocalWhisper}
+          onToggleOverlay={onToggleVoiceOverlay}
+          onRequestConfirm={onRequestConfirm}
+          onNotify={onNotify}
+        />
+      ) : !installed ? (
         <article className="addon-store-card">
           <div className="addon-store-head">
             <div className="addon-store-icon">

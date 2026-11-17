@@ -12,6 +12,7 @@ pub mod security;
 pub mod session;
 pub mod social;
 pub mod startup;
+pub mod voice_note;
 
 use crate::crp_overlay::{
     copy_text_to_clipboard_native, CrpAddonState, CrpOverlayConfig, CrpOverlayManager,
@@ -50,6 +51,9 @@ use crate::startup::{
     apply_process_priority, get_startup_settings, is_autostart_arg, is_windows_startup_enabled,
     set_startup_settings, StartupSettingsState,
 };
+use crate::voice_note::{
+    download_local_whisper_runtime, VoiceAddonState, VoiceNoteConfig, VoiceNoteManager,
+};
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use tauri::menu::{MenuBuilder, MenuItem, MenuItemBuilder};
@@ -68,6 +72,7 @@ pub struct AppState {
     pub overlay: OverlayManager,
     pub perf_overlay: PerfOverlayManager,
     pub crp_overlay: CrpOverlayManager,
+    pub voice_note: VoiceNoteManager,
 }
 
 impl Default for AppState {
@@ -83,6 +88,7 @@ impl Default for AppState {
             overlay: OverlayManager::default(),
             perf_overlay: PerfOverlayManager::default(),
             crp_overlay: CrpOverlayManager::default(),
+            voice_note: VoiceNoteManager::default(),
         }
     }
 }
@@ -615,6 +621,111 @@ fn copy_text_to_clipboard_cmd(
     copy_text_to_clipboard_native(&text)
 }
 
+#[tauri::command]
+fn get_voice_note_state_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<VoiceAddonState, String> {
+    crate::security::verify_ipc_caller(&webview, true)?;
+    Ok(state.voice_note.snapshot_state(Some(&app)))
+}
+
+#[tauri::command]
+async fn install_voice_note_addon_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<VoiceAddonState, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    let _guard = state
+        .mutation_lock
+        .try_lock()
+        .map_err(|_| "มีคำสั่งกำลังทำงาน กรุณารอสักครู่".to_string())?;
+    state.voice_note.install(&app)
+}
+
+#[tauri::command]
+async fn uninstall_voice_note_addon_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<VoiceAddonState, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    let _guard = state
+        .mutation_lock
+        .try_lock()
+        .map_err(|_| "มีคำสั่งกำลังทำงาน กรุณารอสักครู่".to_string())?;
+    state.voice_note.uninstall(&app)
+}
+
+#[tauri::command]
+fn set_voice_note_config_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    config: VoiceNoteConfig,
+) -> Result<VoiceAddonState, String> {
+    crate::security::verify_ipc_caller(&webview, true)?;
+    state.voice_note.update_config(&app, config)
+}
+
+#[tauri::command]
+fn start_voice_note_capture_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<VoiceAddonState, String> {
+    crate::security::verify_ipc_caller(&webview, true)?;
+    state.voice_note.start_capture(&app)
+}
+
+#[tauri::command]
+fn stop_voice_note_capture_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<VoiceAddonState, String> {
+    crate::security::verify_ipc_caller(&webview, true)?;
+    Ok(state.voice_note.stop_capture(&app))
+}
+
+#[tauri::command]
+async fn download_local_whisper_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    model_id: String,
+) -> Result<VoiceAddonState, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    let _guard = state
+        .mutation_lock
+        .try_lock()
+        .map_err(|_| "มีคำสั่งกำลังทำงาน กรุณารอสักครู่".to_string())?;
+    download_local_whisper_runtime(&app, &state.voice_note, model_id).await
+}
+
+#[tauri::command]
+fn toggle_voice_note_overlay_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    visible: Option<bool>,
+) -> Result<bool, String> {
+    crate::security::verify_ipc_caller(&webview, true)?;
+    state.voice_note.toggle_overlay(&app, visible)
+}
+
+#[tauri::command]
+fn hide_voice_note_overlay_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    crate::security::verify_ipc_caller(&webview, true)?;
+    state.voice_note.toggle_overlay(&app, Some(false))
+}
+
 pub fn run() {
     let startup_args: Vec<String> = std::env::args().collect();
     let launched_autostart = is_autostart_arg(&startup_args);
@@ -731,6 +842,7 @@ pub fn run() {
             app_state
                 .crp_overlay
                 .init_from_disk(&app.handle(), app_state.overlay.clone());
+            app_state.voice_note.init_from_disk(&app.handle());
             start_hotkey_listener(
                 app.handle().clone(),
                 app_state.screenshots.clone(),
@@ -785,6 +897,15 @@ pub fn run() {
             toggle_crp_overlay_window_cmd,
             hide_crp_overlay_window_cmd,
             copy_text_to_clipboard_cmd,
+            get_voice_note_state_cmd,
+            install_voice_note_addon_cmd,
+            uninstall_voice_note_addon_cmd,
+            set_voice_note_config_cmd,
+            start_voice_note_capture_cmd,
+            stop_voice_note_capture_cmd,
+            download_local_whisper_cmd,
+            toggle_voice_note_overlay_cmd,
+            hide_voice_note_overlay_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Estra FiveM Launcher");

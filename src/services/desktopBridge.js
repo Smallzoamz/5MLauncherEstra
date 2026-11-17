@@ -134,6 +134,65 @@ export function initDesktopBridge() {
         else unlisten();
       });
       return () => { active = false; unlistenFn?.(); };
+    },
+    getVoiceNoteState: () => invoke('get_voice_note_state_cmd'),
+    installVoiceNoteAddon: () => invoke('install_voice_note_addon_cmd'),
+    uninstallVoiceNoteAddon: () => invoke('uninstall_voice_note_addon_cmd'),
+    setVoiceNoteConfig: config => invoke('set_voice_note_config_cmd', { config }),
+    startVoiceNoteCapture: () => invoke('start_voice_note_capture_cmd'),
+    stopVoiceNoteCapture: () => invoke('stop_voice_note_capture_cmd'),
+    downloadLocalWhisper: modelId => invoke('download_local_whisper_cmd', { modelId }),
+    toggleVoiceNoteOverlay: (visible = null) => invoke('toggle_voice_note_overlay_cmd', { visible }),
+    hideVoiceNoteOverlay: () => invoke('hide_voice_note_overlay_cmd'),
+    onVoiceNoteState: callback => {
+      if (typeof callback !== 'function') return () => {};
+      let active = true;
+      let unlistenFn = null;
+      void listen('estra://voice-note-state', event => { if (active) callback(event.payload); }).then(unlisten => {
+        if (active) unlistenFn = unlisten;
+        else unlisten();
+      });
+      return () => { active = false; unlistenFn?.(); };
+    },
+    onVoiceNoteMeter: callback => {
+      if (typeof callback !== 'function') return () => {};
+      let active = true;
+      let unlistenFn = null;
+      void listen('estra://voice-note-meter', event => { if (active) callback(event.payload); }).then(unlisten => {
+        if (active) unlistenFn = unlisten;
+        else unlisten();
+      });
+      return () => { active = false; unlistenFn?.(); };
+    },
+    onVoiceNoteTranscript: callback => {
+      if (typeof callback !== 'function') return () => {};
+      let active = true;
+      let unlistenFn = null;
+      void listen('estra://voice-note-transcript', event => { if (active) callback(event.payload); }).then(unlisten => {
+        if (active) unlistenFn = unlisten;
+        else unlisten();
+      });
+      return () => { active = false; unlistenFn?.(); };
+    },
+    onVoiceNoteError: callback => {
+      if (typeof callback !== 'function') return () => {};
+      let active = true;
+      let unlistenFn = null;
+      void listen('estra://voice-note-error', event => { if (active) callback(event.payload); }).then(unlisten => {
+        if (active) unlistenFn = unlisten;
+        else unlisten();
+      });
+      return () => { active = false; unlistenFn?.(); };
+    },
+    onVoiceNoteDownload: callback => {
+      if (typeof callback !== 'function') return () => {};
+      let active = true;
+      let unlistenFn = null;
+      void listen('estra://voice-note-download', event => { if (active) callback(event.payload); }).then(unlisten => {
+        if (active) unlistenFn = unlisten;
+        else unlisten();
+      });
+      return () => { active = false; unlistenFn?.(); };
     }
   });
 }

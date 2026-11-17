@@ -1,6 +1,6 @@
 [package]
 name = "estra-fivem-launcher"
-version = "2.3.0"
+version = "2.3.1"
 description = "Estra FiveM Launcher for Windows"
 authors = ["Estra FiveM Launcher contributors"]
 edition = "2021"
@@ -22,7 +22,7 @@ tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["time", "sync", "io-util", "net", "macros"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "multipart"] }
 futures-util = "0.3"
 sha2 = "0.10"
 hex = "0.4"
@@ -33,9 +33,11 @@ rusty-leveldb = "4"
 winreg = "0.52"
 uuid = { version = "1", features = ["v4"] }
 png = "0.18"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.39"
+windows-core = "0.62"
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_Graphics_Direct3D",
@@ -44,8 +46,12 @@ windows = { version = "0.62", features = [
   "Win32_Graphics_Dxgi_Common",
   "Win32_Graphics_Dwm",
   "Win32_Graphics_Gdi",
+  "Win32_Media_Audio",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
   "Win32_System_Performance",
   "Win32_System_Threading",
+  "Win32_System_Variant",
   "Win32_UI_HiDpi",
   "Win32_UI_WindowsAndMessaging",
 ] }

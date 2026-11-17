@@ -61,6 +61,17 @@ export default function MainLauncher({
   onUninstallCrpAddon,
   onSaveCrpConfig,
   onToggleCrpOverlay,
+  voiceState,
+  voiceMeter,
+  voiceDownloadProgress,
+  voiceBusy = false,
+  onInstallVoiceAddon,
+  onUninstallVoiceAddon,
+  onSaveVoiceConfig,
+  onStartVoiceCapture,
+  onStopVoiceCapture,
+  onDownloadLocalWhisper,
+  onToggleVoiceOverlay,
   onRequestConfirm,
   onNotify,
   busy,
@@ -115,6 +126,17 @@ export default function MainLauncher({
           onUninstallAddon={onUninstallCrpAddon}
           onSaveConfig={onSaveCrpConfig}
           onToggleOverlayWindow={onToggleCrpOverlay}
+          voiceState={voiceState}
+          voiceMeter={voiceMeter}
+          voiceDownloadProgress={voiceDownloadProgress}
+          voiceBusy={voiceBusy}
+          onInstallVoiceAddon={onInstallVoiceAddon}
+          onUninstallVoiceAddon={onUninstallVoiceAddon}
+          onSaveVoiceConfig={onSaveVoiceConfig}
+          onStartVoiceCapture={onStartVoiceCapture}
+          onStopVoiceCapture={onStopVoiceCapture}
+          onDownloadLocalWhisper={onDownloadLocalWhisper}
+          onToggleVoiceOverlay={onToggleVoiceOverlay}
           onRequestConfirm={onRequestConfirm}
           onNotify={onNotify}
         />

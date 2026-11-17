@@ -10,7 +10,8 @@ const isOverlayWindow = windowMode === 'overlay';
 const isPerfWindow = windowMode === 'perf';
 const isClockWindow = windowMode === 'clock';
 const isCrpOverlayWindow = windowMode === 'crp-overlay';
-if (window.estraWindow && !isOverlayWindow && !isPerfWindow && !isClockWindow && !isCrpOverlayWindow) {
+const isVoiceNoteWindow = windowMode === 'voice-note';
+if (window.estraWindow && !isOverlayWindow && !isPerfWindow && !isClockWindow && !isCrpOverlayWindow && !isVoiceNoteWindow) {
   document.documentElement.classList.add('desktop-app');
 }
 import React from 'react';
@@ -20,6 +21,7 @@ import OverlayApp from './components/OverlayApp';
 import PerfOverlayApp from './components/PerfOverlayApp';
 import ClockOverlayApp from './components/ClockOverlayApp';
 import CrpOverlayApp from './components/CrpOverlayApp';
+import VoiceNoteOverlayApp from './components/VoiceNoteOverlayApp';
 import './index.css';
 
 if (!guardState.blocked) {
@@ -33,6 +35,8 @@ if (!guardState.blocked) {
         <ClockOverlayApp desktopWindow />
       ) : isCrpOverlayWindow ? (
         <CrpOverlayApp desktopWindow />
+      ) : isVoiceNoteWindow ? (
+        <VoiceNoteOverlayApp desktopWindow />
       ) : (
         <App />
       )}

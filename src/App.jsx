@@ -44,6 +44,17 @@ import {
   toggleCrpOverlayWindow,
   uninstallCrpOverlayAddon
 } from './services/crpOverlayService';
+import {
+  DEFAULT_VOICE_NOTE_CONFIG,
+  downloadLocalWhisperRuntime,
+  installVoiceNoteAddon,
+  loadVoiceNoteState,
+  saveVoiceNoteConfig,
+  startVoiceNoteCapture,
+  stopVoiceNoteCapture,
+  toggleVoiceNoteOverlayWindow,
+  uninstallVoiceNoteAddon
+} from './services/voiceNoteService';
 import { isTauriDesktop } from './services/desktopBridge';
 import OverlayApp from './components/OverlayApp';
 import { prepareLaunch } from './services/prepareLaunch';
@@ -155,6 +166,21 @@ export default function App() {
     installDir: ''
   });
   const [crpAddonBusy, setCrpAddonBusy] = useState(false);
+  const [voiceNoteState, setVoiceNoteState] = useState({
+    installed: false,
+    manifest: null,
+    config: DEFAULT_VOICE_NOTE_CONFIG,
+    listening: false,
+    overlayVisible: false,
+    localEngineReady: false,
+    localModelReady: false,
+    localModelsDownloaded: [],
+    activeCaptureLabel: '',
+    installDir: ''
+  });
+  const [voiceMeter, setVoiceMeter] = useState({ level: 0, speaking: false, transcribing: false });
+  const [voiceDownloadProgress, setVoiceDownloadProgress] = useState(null);
+  const [voiceBusy, setVoiceBusy] = useState(false);
   const crpFiredKeysRef = useRef(new Set());
   const crpAddonStateRef = useRef(crpAddonState);
   crpAddonStateRef.current = crpAddonState;
@@ -484,6 +510,41 @@ export default function App() {
       active = false;
       offAddonState?.();
       offScheduleFired?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void loadVoiceNoteState()
+      .then(state => {
+        if (active && state) setVoiceNoteState(state);
+      })
+      .catch(() => {});
+
+    const offVoiceState = window.estraWindow?.onVoiceNoteState?.(state => {
+      if (active && state) setVoiceNoteState(state);
+    });
+    const offMeter = window.estraWindow?.onVoiceNoteMeter?.(m => {
+      if (active && m) setVoiceMeter(m);
+    });
+    const offDl = window.estraWindow?.onVoiceNoteDownload?.(p => {
+      if (active && p) setVoiceDownloadProgress(p.percent >= 100 ? null : p);
+    });
+    const offErr = window.estraWindow?.onVoiceNoteError?.(err => {
+      if (!active) return;
+      setUiNotice({
+        message: typeof err === 'string' ? err : err?.message || 'Voice To Note ขัดข้อง',
+        tone: 'error',
+        _seq: ++alertSeqRef.current
+      });
+    });
+
+    return () => {
+      active = false;
+      offVoiceState?.();
+      offMeter?.();
+      offDl?.();
+      offErr?.();
     };
   }, []);
 
@@ -903,6 +964,121 @@ export default function App() {
     }
   };
 
+  const handleInstallVoiceAddon = async () => {
+    if (voiceBusy) return;
+    setVoiceBusy(true);
+    try {
+      const next = await installVoiceNoteAddon();
+      setVoiceNoteState(next);
+      setUiNotice({
+        message: 'ติดตั้ง Voice To Note สำเร็จ! ตั้งค่า Engine หรือลองทดสอบ Word Suggestion ได้เลย',
+        tone: 'notice',
+        _seq: ++alertSeqRef.current
+      });
+    } catch (err) {
+      setUiNotice({
+        message: typeof err === 'string' ? err : err?.message || 'ติดตั้ง Voice To Note ไม่สำเร็จ',
+        tone: 'error',
+        _seq: ++alertSeqRef.current
+      });
+    } finally {
+      setVoiceBusy(false);
+    }
+  };
+
+  const handleUninstallVoiceAddon = async () => {
+    if (voiceBusy) return;
+    setVoiceBusy(true);
+    try {
+      const next = await uninstallVoiceNoteAddon();
+      setVoiceNoteState(next);
+      setVoiceDownloadProgress(null);
+      setUiNotice({
+        message: 'ถอนการติดตั้ง Voice To Note เรียบร้อยแล้ว',
+        tone: 'notice',
+        _seq: ++alertSeqRef.current
+      });
+    } catch (err) {
+      setUiNotice({
+        message: typeof err === 'string' ? err : err?.message || 'ถอนการติดตั้ง Voice To Note ไม่สำเร็จ',
+        tone: 'error',
+        _seq: ++alertSeqRef.current
+      });
+    } finally {
+      setVoiceBusy(false);
+    }
+  };
+
+  const handleSaveVoiceConfig = async nextConfig => {
+    try {
+      const next = await saveVoiceNoteConfig(nextConfig);
+      setVoiceNoteState(next);
+    } catch (err) {
+      setUiNotice({
+        message: typeof err === 'string' ? err : err?.message || 'บันทึกการตั้งค่า Voice To Note ไม่สำเร็จ',
+        tone: 'error',
+        _seq: ++alertSeqRef.current
+      });
+    }
+  };
+
+  const handleStartVoiceCapture = async () => {
+    try {
+      const next = await startVoiceNoteCapture();
+      setVoiceNoteState(next);
+    } catch (err) {
+      setUiNotice({
+        message: typeof err === 'string' ? err : err?.message || 'เริ่มจับเสียงไม่สำเร็จ',
+        tone: 'error',
+        _seq: ++alertSeqRef.current
+      });
+    }
+  };
+
+  const handleStopVoiceCapture = async () => {
+    try {
+      const next = await stopVoiceNoteCapture();
+      setVoiceNoteState(next);
+    } catch {}
+  };
+
+  const handleDownloadLocalWhisper = async modelId => {
+    if (voiceBusy) return;
+    setVoiceBusy(true);
+    try {
+      const next = await downloadLocalWhisperRuntime(modelId);
+      setVoiceNoteState(next);
+      setVoiceDownloadProgress(null);
+      setUiNotice({
+        message: 'ดาวน์โหลด Local Whisper Engine และโมเดลพร้อมใช้งานแล้ว!',
+        tone: 'notice',
+        _seq: ++alertSeqRef.current
+      });
+    } catch (err) {
+      setVoiceDownloadProgress(null);
+      setUiNotice({
+        message: typeof err === 'string' ? err : err?.message || 'ดาวน์โหลด Local Whisper ไม่สำเร็จ',
+        tone: 'error',
+        _seq: ++alertSeqRef.current
+      });
+    } finally {
+      setVoiceBusy(false);
+    }
+  };
+
+  const handleToggleVoiceOverlay = async () => {
+    try {
+      const nextVisible = await toggleVoiceNoteOverlayWindow(null);
+      setVoiceNoteState(prev => ({ ...prev, overlayVisible: Boolean(nextVisible) }));
+    } catch (err) {
+      setUiNotice({
+        message: typeof err === 'string' ? err : err?.message || 'ไม่สามารถเปิด-ปิดหน้าต่าง Voice Overlay ได้',
+        tone: 'error',
+        _seq: ++alertSeqRef.current
+      });
+    }
+  };
+
   const floatingAlerts = [];
   if (social.authenticated && social.user?.mustChangePassword && !dismissedAlerts[`must-chpw:${social.user.id}`]) {
     floatingAlerts.push({
@@ -1039,7 +1215,7 @@ export default function App() {
             onOpenGuide={handleOpenGuide}
             hasLauncherUpdate={!!launcherUpdate?.available}
             social={social}
-            crpAddonInstalled={Boolean(crpAddonState?.installed)}
+            crpAddonInstalled={Boolean(crpAddonState?.installed || voiceNoteState?.installed)}
             onOpenAuth={openAccountModal}
             communityLinks={communityLinks}
             onOpenCommunityLink={handleOpenCommunityLink}
@@ -1097,6 +1273,17 @@ export default function App() {
               onUninstallCrpAddon={handleUninstallCrpAddon}
               onSaveCrpConfig={handleSaveCrpConfig}
               onToggleCrpOverlay={handleToggleCrpOverlay}
+              voiceState={voiceNoteState}
+              voiceMeter={voiceMeter}
+              voiceDownloadProgress={voiceDownloadProgress}
+              voiceBusy={voiceBusy}
+              onInstallVoiceAddon={handleInstallVoiceAddon}
+              onUninstallVoiceAddon={handleUninstallVoiceAddon}
+              onSaveVoiceConfig={handleSaveVoiceConfig}
+              onStartVoiceCapture={handleStartVoiceCapture}
+              onStopVoiceCapture={handleStopVoiceCapture}
+              onDownloadLocalWhisper={handleDownloadLocalWhisper}
+              onToggleVoiceOverlay={handleToggleVoiceOverlay}
               onRequestConfirm={requestConfirm}
               onNotify={(message, tone = 'notice') => setUiNotice({ message, tone, _seq: ++alertSeqRef.current })}
             />
