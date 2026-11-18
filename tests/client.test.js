@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getSavedServers, saveServers, getSettings, getActiveServerId, hasSeenOnboardingGuide, markOnboardingGuideSeen } from '../src/services/storageService.js';
+import { getSavedServers, saveServers, getSettings, saveSettings, getActiveServerId, saveActiveServerId, claimLegacyServersOnce, resetLive, hasSeenOnboardingGuide, markOnboardingGuideSeen } from '../src/services/storageService.js';
+import { buildServersSyncSignature, mergeCloudServersWithLocalCache } from '../src/shared/userServersSync.js';
+import { diffCalendarDuration, formatDetailedDurationThai, formatOfflineDurationLabel, formatPlaytimeSteam, formatLastPlayedLabel } from '../src/shared/durationFormat.js';
 import { lookupDirectoryServer, applyDirectoryMetadataToServer, mergeDirectoryEntries, cleanFiveMServerName, pickFetchedServerName, syncLiveServerName } from '../src/shared/serverDirectory.js';
 import { SERVER_TAGS, CATEGORY_TAGS, DEFAULT_SERVER_TAG, normalizeServerTag } from '../src/shared/serverTags.js';
 import { queryServerInfo, launchFiveM } from '../src/services/fivemService.js';
@@ -147,4 +149,90 @@ test('switching devices cancels older requests without adopting old streams', as
   for (const resolve of resolvers) resolve({getTracks:() => [{stop:()=>stopped++}]});
   assert.equal((await first).success,false); assert.equal((await second).success,false); assert.equal(stopped,2);
 });
+
+test('per-user storage isolates servers & server settings across users, claims legacy once, and keeps program settings local', () => {
+  const values = new Map();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: k => values.get(k) ?? null,
+      setItem: (k, v) => values.set(k, String(v)),
+      removeItem: k => values.delete(k)
+    }
+  });
+
+  // Program/machine settings stay local regardless of logged-in user
+  saveSettings({ ...getSettings(), fivemPath: 'D:\\Games\\FiveM.exe', perfOverlayEnabled: true });
+
+  // Legacy anonymous servers exist before login
+  saveServers([{ id: 'legacy-1', name: 'Legacy RP', ip: '1.1.1.1:30120', tag: 'RP', inGameName: 'LegacyChar' }]);
+  saveActiveServerId('legacy-1');
+
+  // First user claims legacy servers once and clears legacy keys so user-2 never sees them
+  const claimedByUser1 = claimLegacyServersOnce();
+  assert.equal(claimedByUser1?.servers.length, 1);
+  assert.equal(claimedByUser1?.activeServerId, 'legacy-1');
+  assert.equal(claimLegacyServersOnce(), null);
+  assert.deepEqual(getSavedServers('user-2'), []);
+  assert.equal(getActiveServerId('user-2'), '');
+
+  // Separate user server caches & merge with cloud data preserving local icon cache only
+  saveServers([{ id: 'city-a', name: 'Local Cache', ip: '2.2.2.2:30120', logoUrl: 'data:image/png;base64,QUJD', iconSource: 'server-icon-v1' }], 'user-1');
+  saveActiveServerId('city-a', 'user-1');
+  saveServers([{ id: 'city-b', name: 'User Two City', ip: '3.3.3.3:30120', tag: 'SRP' }], 'user-2');
+  saveActiveServerId('city-b', 'user-2');
+
+  assert.equal(getSavedServers('user-1')[0].id, 'city-a');
+  assert.equal(getSavedServers('user-2')[0].id, 'city-b');
+  assert.equal(getActiveServerId('user-1'), 'city-a');
+  assert.equal(getActiveServerId('user-2'), 'city-b');
+
+  const merged = mergeCloudServersWithLocalCache(
+    [{ id: 'city-a', name: 'Cloud Renamed', ip: '2.2.2.2:30120', tag: 'Commu', inGameName: 'CloudName', cl2: true, favorite: true, customBannerUrl: 'https://cdn.example.com/banner.jpg' }],
+    getSavedServers('user-1'),
+    resetLive
+  );
+  assert.equal(merged[0].name, 'Cloud Renamed');
+  assert.equal(merged[0].inGameName, 'CloudName');
+  assert.equal(merged[0].cl2, true);
+  assert.equal(merged[0].favorite, true);
+  assert.equal(merged[0].logoUrl, 'data:image/png;base64,QUJD');
+
+  // Ephemeral live status/icon never alters sync signature
+  const sigA = buildServersSyncSignature(merged, 'city-a');
+  const sigB = buildServersSyncSignature([{ ...merged[0], onlinePlayers: 99, status: 'Online', logoUrl: 'data:image/png;base64,WFlZ' }], 'city-a');
+  assert.equal(sigA, sigB);
+
+  // Local machine settings remain intact after user operations
+  assert.equal(getSettings().fivemPath, 'D:\\Games\\FiveM.exe');
+  assert.equal(getSettings().perfOverlayEnabled, true);
+});
+
+test('durationFormat computes year/month/day/hour/minute offline durations and Steam-style playtime', () => {
+  const start = new Date(2025, 0, 15, 10, 20, 0).getTime();
+  const end = new Date(2026, 2, 18, 13, 35, 0).getTime();
+  const diff = diffCalendarDuration(start, end);
+  assert.equal(diff.years, 1);
+  assert.equal(diff.months, 2);
+  assert.equal(diff.days, 3);
+  assert.equal(diff.hours, 3);
+  assert.equal(diff.minutes, 15);
+  assert.equal(formatDetailedDurationThai(start, end), '1 ปี 2 เดือน 3 วัน 3 ชั่วโมง 15 นาที');
+  assert.equal(formatOfflineDurationLabel(start, end), 'ออฟไลน์มาแล้ว 1 ปี 2 เดือน 3 วัน 3 ชั่วโมง 15 นาที');
+  assert.equal(formatOfflineDurationLabel(end - 25_000, end), 'ออฟไลน์มาแล้ว ไม่ถึง 1 นาที');
+  assert.equal(formatOfflineDurationLabel(null, end), 'ออฟไลน์');
+
+  assert.equal(formatPlaytimeSteam(0).short, 'ยังไม่เคยเล่น');
+  assert.equal(formatPlaytimeSteam(45).short, 'น้อยกว่า 1 นาที');
+  assert.equal(formatPlaytimeSteam(1800).short, '30 นาที');
+  assert.equal(formatPlaytimeSteam(5400).short, '1.5 ชม.');
+  assert.equal(formatPlaytimeSteam(5400).full, '1 ชั่วโมง 30 นาที');
+  assert.equal(formatPlaytimeSteam(370_800).short, '103 ชม.');
+
+  assert.equal(formatLastPlayedLabel(start, true, end), 'กำลังเล่นอยู่ในขณะนี้');
+  assert.equal(formatLastPlayedLabel(null, false, end), 'ยังไม่เคยเข้าเมืองนี้');
+  assert.match(formatLastPlayedLabel(start, false, end), /^เล่นล่าสุด 1 ปี 2 เดือน 3 วัน 3 ชั่วโมง 15 นาที ที่แล้ว$/);
+});
+
+
 

@@ -3,6 +3,7 @@ import { ArrowLeft, CheckCheck, Clock, Send, SendHorizontal } from 'lucide-react
 import { UserAvatar } from './UserAvatar';
 import { loadCachedChat, saveCachedChat } from '../services/chatCacheService';
 import { subscribeChatTyping } from '../services/socialRealtime';
+import { formatOfflineDurationLabel } from '../shared/durationFormat';
 
 function formatMessageTime(iso) {
   const ts = Date.parse(iso);
@@ -133,7 +134,7 @@ export default function FriendChatPanel({
         ? 'ออนไลน์บน Estra'
         : friend.presence === 'away'
           ? 'ไม่อยู่ชั่วคราว'
-          : 'ออฟไลน์';
+          : formatOfflineDurationLabel(friend.lastSeenAt);
 
   return (
     <div className="friends-chat-view">

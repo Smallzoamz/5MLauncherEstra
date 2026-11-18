@@ -7,7 +7,18 @@ const STORAGE_KEY_SERVERS = 'fivem_launcher_servers_v3';
 const STORAGE_KEY_ACTIVE_ID = 'fivem_launcher_active_server_id_v3';
 const STORAGE_KEY_SETTINGS = 'fivem_launcher_settings_v3';
 const STORAGE_KEY_EMPTY_DEFAULT_MIGRATED = 'estra_empty_default_migrated_v1';
+const STORAGE_KEY_LEGACY_SERVERS_CLAIMED = 'estra_legacy_servers_claimed_v1';
 const STORAGE_KEY_ONBOARDING_GUIDE_SEEN = 'estra_onboarding_guide_seen_v1';
+
+function serversStorageKey(userId) {
+  const clean = String(userId || '').trim();
+  return clean ? `fivem_launcher_servers_user_${clean}` : STORAGE_KEY_SERVERS;
+}
+
+function activeServerStorageKey(userId) {
+  const clean = String(userId || '').trim();
+  return clean ? `fivem_launcher_active_server_user_${clean}` : STORAGE_KEY_ACTIVE_ID;
+}
 export const DEFAULT_SETTINGS = {
   fivemPath: '', autoClearCacheBeforeLaunch: false, checkMicBeforeLaunch: true,
   requireSteamDiscordBeforeLaunch: false, runOnWindowsStartup: false, preferredAudioDeviceId: 'default',
@@ -25,7 +36,7 @@ export const DEFAULT_SETTINGS = {
   facebookUrl: 'https://www.facebook.com/estralauncher'
 };
 export const DEFAULT_SERVERS = [];
-function resetLive(s) { return { ...s, tag: normalizeServerTag(s.tag, DEFAULT_SERVER_TAG), favorite: !!s.favorite, directorySlug: typeof s.directorySlug === 'string' ? s.directorySlug : '', lastFetchedName: typeof s.lastFetchedName === 'string' ? s.lastFetchedName : '', customBannerUrl: bannerImageUrl(s.customBannerUrl), bannerUrl: bannerImageUrl(s.bannerUrl), connectingBannerUrl: bannerImageUrl(s.connectingBannerUrl), patchManifestUrl: normalizePatchManifestUrl(s.patchManifestUrl) || '', logoUrl: s.iconSource === 'server-icon-v1' && typeof s.logoUrl === 'string' && s.logoUrl.startsWith('data:image/png;base64,') ? s.logoUrl : null, iconSource: s.iconSource === 'server-icon-v1' ? s.iconSource : null, status: 'Unknown', onlinePlayers: null, maxPlayers: null, ping: null, gameBuild: null, lockPure: null, queryError: null }; }
+export function resetLive(s) { return { ...s, tag: normalizeServerTag(s.tag, DEFAULT_SERVER_TAG), favorite: !!s.favorite, directorySlug: typeof s.directorySlug === 'string' ? s.directorySlug : '', lastFetchedName: typeof s.lastFetchedName === 'string' ? s.lastFetchedName : '', playtimeSeconds: Number.isFinite(Number(s.playtimeSeconds)) && Number(s.playtimeSeconds) > 0 ? Math.floor(Number(s.playtimeSeconds)) : 0, lastPlayedAt: typeof s.lastPlayedAt === 'string' && s.lastPlayedAt ? s.lastPlayedAt : null, lastOnlineAt: typeof s.lastOnlineAt === 'string' && s.lastOnlineAt ? s.lastOnlineAt : null, customBannerUrl: bannerImageUrl(s.customBannerUrl), bannerUrl: bannerImageUrl(s.bannerUrl), connectingBannerUrl: bannerImageUrl(s.connectingBannerUrl), patchManifestUrl: normalizePatchManifestUrl(s.patchManifestUrl) || '', logoUrl: s.iconSource === 'server-icon-v1' && typeof s.logoUrl === 'string' && s.logoUrl.startsWith('data:image/png;base64,') ? s.logoUrl : null, iconSource: s.iconSource === 'server-icon-v1' ? s.iconSource : null, status: 'Unknown', onlinePlayers: null, maxPlayers: null, ping: null, gameBuild: null, lockPure: null, queryError: null }; }
 function isUntouchedFactoryDefaultServer(list) {
   if (!Array.isArray(list) || list.length !== 1) return false;
   const item = list[0];
@@ -37,32 +48,56 @@ function isUntouchedFactoryDefaultServer(list) {
     !String(item.patchManifestUrl || '').trim()
   );
 }
-export function getSavedServers() {
+export function getSavedServers(userId = '') {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY_SERVERS);
+    const key = serversStorageKey(userId);
+    const raw = localStorage.getItem(key);
     if (!raw) return DEFAULT_SERVERS.map(resetLive);
     const list = JSON.parse(raw);
     if (!Array.isArray(list)) return DEFAULT_SERVERS.map(resetLive);
-    const migrated = localStorage.getItem(STORAGE_KEY_EMPTY_DEFAULT_MIGRATED);
-    if (!migrated) {
-      try { localStorage.setItem(STORAGE_KEY_EMPTY_DEFAULT_MIGRATED, '1'); } catch {}
-      if (isUntouchedFactoryDefaultServer(list)) {
-        try {
-          localStorage.setItem(STORAGE_KEY_SERVERS, '[]');
-          if (localStorage.getItem(STORAGE_KEY_ACTIVE_ID) === 'noxtis-legacy') {
-            localStorage.setItem(STORAGE_KEY_ACTIVE_ID, '');
-          }
-        } catch {}
-        return [];
+    if (!userId) {
+      const migrated = localStorage.getItem(STORAGE_KEY_EMPTY_DEFAULT_MIGRATED);
+      if (!migrated) {
+        try { localStorage.setItem(STORAGE_KEY_EMPTY_DEFAULT_MIGRATED, '1'); } catch {}
+        if (isUntouchedFactoryDefaultServer(list)) {
+          try {
+            localStorage.setItem(STORAGE_KEY_SERVERS, '[]');
+            if (localStorage.getItem(STORAGE_KEY_ACTIVE_ID) === 'noxtis-legacy') {
+              localStorage.setItem(STORAGE_KEY_ACTIVE_ID, '');
+            }
+          } catch {}
+          return [];
+        }
       }
     }
     const ids = new Set();
     return list.filter(s => s && typeof s.id === 'string' && typeof s.name === 'string' && typeof s.ip === 'string' && !ids.has(s.id) && ids.add(s.id)).map(resetLive);
   } catch { return DEFAULT_SERVERS.map(resetLive); }
 }
-export function saveServers(servers) { localStorage.setItem(STORAGE_KEY_SERVERS, JSON.stringify(servers.map(({ id, name, ip, tag, inGameName, logoUrl, iconSource, bannerUrl, connectingBannerUrl, customBannerUrl, cl2, favorite, patchManifestUrl, directorySlug, lastFetchedName }) => ({ id, name, ip, tag, inGameName, logoUrl, iconSource, bannerUrl, connectingBannerUrl, customBannerUrl, cl2, favorite: !!favorite, patchManifestUrl: patchManifestUrl || '', directorySlug: directorySlug || '', lastFetchedName: typeof lastFetchedName === 'string' ? lastFetchedName : '' })))); }
-export function getActiveServerId() { try { return localStorage.getItem(STORAGE_KEY_ACTIVE_ID) || ''; } catch { return ''; } }
-export function saveActiveServerId(id) { localStorage.setItem(STORAGE_KEY_ACTIVE_ID, id); }
+export function saveServers(servers, userId = '') {
+  const key = serversStorageKey(userId);
+  localStorage.setItem(key, JSON.stringify(servers.map(({ id, name, ip, tag, inGameName, logoUrl, iconSource, bannerUrl, connectingBannerUrl, customBannerUrl, cl2, favorite, patchManifestUrl, directorySlug, lastFetchedName, playtimeSeconds, lastPlayedAt, lastOnlineAt }) => ({ id, name, ip, tag, inGameName, logoUrl, iconSource, bannerUrl, connectingBannerUrl, customBannerUrl, cl2, favorite: !!favorite, patchManifestUrl: patchManifestUrl || '', directorySlug: directorySlug || '', lastFetchedName: typeof lastFetchedName === 'string' ? lastFetchedName : '', playtimeSeconds: Math.max(0, Math.floor(Number(playtimeSeconds) || 0)), lastPlayedAt: lastPlayedAt || null, lastOnlineAt: lastOnlineAt || null }))));
+}
+export function getActiveServerId(userId = '') {
+  try { return localStorage.getItem(activeServerStorageKey(userId)) || ''; } catch { return ''; }
+}
+export function saveActiveServerId(id, userId = '') {
+  localStorage.setItem(activeServerStorageKey(userId), id || '');
+}
+export function claimLegacyServersOnce() {
+  try {
+    if (localStorage.getItem(STORAGE_KEY_LEGACY_SERVERS_CLAIMED) === '1') return null;
+    const legacyServers = getSavedServers('');
+    const legacyActiveId = getActiveServerId('');
+    localStorage.setItem(STORAGE_KEY_LEGACY_SERVERS_CLAIMED, '1');
+    localStorage.removeItem(STORAGE_KEY_SERVERS);
+    localStorage.removeItem(STORAGE_KEY_ACTIVE_ID);
+    if (!legacyServers.length && !legacyActiveId) return null;
+    return { servers: legacyServers, activeServerId: legacyActiveId };
+  } catch {
+    return null;
+  }
+}
 export function hasSeenOnboardingGuide() { try { return localStorage.getItem(STORAGE_KEY_ONBOARDING_GUIDE_SEEN) === '1'; } catch { return true; } }
 export function markOnboardingGuideSeen() { try { localStorage.setItem(STORAGE_KEY_ONBOARDING_GUIDE_SEEN, '1'); } catch {} }
 export function getSettings() {

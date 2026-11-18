@@ -17,7 +17,8 @@ import UpdatePromptModal from './components/UpdatePromptModal';
 import { AlertToastStack } from './components/AlertToastStack';
 import { UserAvatar } from './components/UserAvatar';
 import useDialogFocus from './components/useDialogFocus';
-import { getSavedServers, saveServers, getActiveServerId, saveActiveServerId, getSettings, saveSettings, hasSeenOnboardingGuide, markOnboardingGuideSeen } from './services/storageService';
+import { getSavedServers, saveServers, getActiveServerId, saveActiveServerId, claimLegacyServersOnce, resetLive, getSettings, saveSettings, hasSeenOnboardingGuide, markOnboardingGuideSeen } from './services/storageService';
+import { buildServersSyncPayload, buildServersSyncSignature, mergeCloudServersWithLocalCache } from './shared/userServersSync';
 import { fetchServerDirectory, loadCachedServerDirectory } from './services/serverDirectoryService';
 import { applyDirectoryMetadataToServer, lookupDirectoryServer, normalizeDirectoryAddress, syncLiveServerName } from './shared/serverDirectory';
 import { DEFAULT_SERVER_TAG, normalizeServerTag } from './shared/serverTags';
@@ -81,6 +82,7 @@ import {
   sendFriendRequest,
   sendGameInvite,
   sendHeartbeat,
+  syncUserServers,
   toggleFavoriteFriend,
   toggleRemoteFavoriteServer,
   updateSocialProfile
@@ -105,8 +107,8 @@ const EMPTY_SOCIAL = {
 };
 
 export default function App() {
-  const [servers, setServers] = useState(getSavedServers);
-  const [activeId, setActiveId] = useState(getActiveServerId);
+  const [servers, setServers] = useState([]);
+  const [activeId, setActiveId] = useState('');
   const [settings, setSettings] = useState(getSettings);
   const [modal, setVisibleModal] = useState(null);
   const [modalClosing, setModalClosing] = useState(false);
@@ -114,8 +116,17 @@ export default function App() {
   const modalTimer = useRef(null);
   const [background, setBackground] = useState({});
   const [centerTab, setCenterTab] = useState('general');
-  const [navStack, setNavStack] = useState([{ tab: 'general', serverId: getActiveServerId() }]);
+  const [navStack, setNavStack] = useState([{ tab: 'general', serverId: '' }]);
   const [navIndex, setNavIndex] = useState(0);
+  const hydratedUserIdRef = useRef('');
+  const lastSyncedSigRef = useRef('');
+  const serverSyncTimerRef = useRef(null);
+  const activePlaySessionRef = useRef({ serverId: '', lastCommittedAtMs: 0 });
+  const lastLaunchedServerIdRef = useRef('');
+  const serversRef = useRef(servers);
+  serversRef.current = servers;
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
   const [friendsMobileOpen, setFriendsMobileOpen] = useState(false);
   const [social, setSocial] = useState(EMPTY_SOCIAL);
   const [realtimeAccessToken, setRealtimeAccessToken] = useState('');
@@ -313,26 +324,85 @@ export default function App() {
     if (target.serverId && servers.some(s => s.id === target.serverId)) setActiveId(target.serverId);
   };
 
-  const mergeRemoteFavorites = useCallback(favList => {
-    if (!Array.isArray(favList) || !favList.length) return;
-    const favIds = new Set(favList.map(f => f.id));
-    setServers(prev => {
-      let changed = false;
-      const next = prev.map(s => {
-        if (favIds.has(s.id) && !s.favorite) {
-          changed = true;
-          return { ...s, favorite: true };
-        }
-        return s;
-      });
-      return changed ? next : prev;
-    });
+  const hydrateUserServers = useCallback(state => {
+    const uid = state?.user?.id;
+    if (!uid) return;
+    const hasSyncedServers = !!state.hasSyncedServers;
+    const cloudServers = Array.isArray(state.savedServers) ? state.savedServers : [];
+    const cloudActiveId = typeof state.activeServerId === 'string' ? state.activeServerId : '';
+    const favIds = new Set((state.favoriteServers || []).map(f => f.id));
+
+    const applyLocalDecorations = list => {
+      let next = list.map(s => (favIds.has(s.id) && !s.favorite ? { ...s, favorite: true } : s));
+      if (directoryRef.current?.length) {
+        next = next.map(srv => applyDirectoryMetadataToServer(srv, directoryRef.current).server);
+      }
+      return next;
+    };
+
+    if (hydratedUserIdRef.current !== uid) {
+      let hydrated;
+      let nextActiveId = '';
+      if (hasSyncedServers) {
+        const cached = getSavedServers(uid);
+        hydrated = applyLocalDecorations(mergeCloudServersWithLocalCache(cloudServers, cached, resetLive));
+        const localActive = getActiveServerId(uid);
+        nextActiveId = (cloudActiveId && hydrated.some(s => s.id === cloudActiveId))
+          ? cloudActiveId
+          : (hydrated.find(s => s.id === localActive)?.id || hydrated[0]?.id || '');
+        lastSyncedSigRef.current = buildServersSyncSignature(hydrated, nextActiveId);
+      } else {
+        const perUserLocal = getSavedServers(uid);
+        const perUserActive = getActiveServerId(uid);
+        const claimed = !perUserLocal.length ? claimLegacyServersOnce() : null;
+        const initialList = perUserLocal.length ? perUserLocal : (claimed?.servers || []);
+        hydrated = applyLocalDecorations(initialList.map(resetLive));
+        nextActiveId = hydrated.some(s => s.id === perUserActive)
+          ? perUserActive
+          : (hydrated.some(s => s.id === claimed?.activeServerId) ? claimed.activeServerId : (hydrated[0]?.id || ''));
+        lastSyncedSigRef.current = hydrated.length > 0 ? '__pending_initial_sync__' : buildServersSyncSignature([], '');
+      }
+
+      hydratedUserIdRef.current = uid;
+      try {
+        saveServers(hydrated, uid);
+        saveActiveServerId(nextActiveId, uid);
+      } catch {}
+      setServers(hydrated);
+      setActiveId(nextActiveId);
+      setNavStack([{ tab: 'general', serverId: nextActiveId }]);
+      setNavIndex(0);
+      return;
+    }
+
+    const currentSig = buildServersSyncSignature(serversRef.current, activeIdRef.current);
+    if (currentSig !== lastSyncedSigRef.current || !hasSyncedServers) {
+      return;
+    }
+
+    const cloudSig = buildServersSyncSignature(cloudServers, cloudActiveId);
+    if (cloudSig === lastSyncedSigRef.current) {
+      return;
+    }
+
+    const merged = applyLocalDecorations(mergeCloudServersWithLocalCache(cloudServers, serversRef.current, resetLive));
+    const nextActiveId = (cloudActiveId && merged.some(s => s.id === cloudActiveId))
+      ? cloudActiveId
+      : (merged.some(s => s.id === activeIdRef.current) ? activeIdRef.current : (merged[0]?.id || ''));
+    lastSyncedSigRef.current = buildServersSyncSignature(merged, nextActiveId);
+    setServers(merged);
+    setActiveId(nextActiveId);
   }, []);
 
   const refreshSocial = useCallback(async () => {
     try {
       const me = await fetchSocialSession(settings.socialServerUrl);
       if (!me?.authenticated) {
+        clearTimeout(serverSyncTimerRef.current);
+        hydratedUserIdRef.current = '';
+        lastSyncedSigRef.current = '';
+        setServers([]);
+        setActiveId('');
         setSocial({ ...EMPTY_SOCIAL, loading: false, mode: me?.mode || 'local' });
         return;
       }
@@ -350,11 +420,11 @@ export default function App() {
         outgoingInvites: state.outgoingInvites || [],
         unreadMessages: state.unreadMessages || {}
       });
-      mergeRemoteFavorites(state.favoriteServers);
+      hydrateUserServers(state);
     } catch {
       setSocial(prev => ({ ...prev, loading: false }));
     }
-  }, [settings.socialServerUrl, mergeRemoteFavorites]);
+  }, [settings.socialServerUrl, hydrateUserServers]);
 
   useEffect(() => {
     void refreshSocial();
@@ -681,10 +751,85 @@ export default function App() {
     }
   };
 
+  const flushActivePlaytime = useCallback((nowMs = Date.now()) => {
+    const sess = activePlaySessionRef.current;
+    if (!sess.serverId || !sess.lastCommittedAtMs) return;
+    const elapsedSec = Math.floor((nowMs - sess.lastCommittedAtMs) / 1000);
+    if (elapsedSec < 1) return;
+    sess.lastCommittedAtMs += elapsedSec * 1000;
+    const playedIso = new Date(nowMs).toISOString();
+    const targetId = sess.serverId;
+    setServers(prev => prev.map(s => (
+      s.id === targetId
+        ? { ...s, playtimeSeconds: Math.max(0, Math.floor(Number(s.playtimeSeconds) || 0)) + elapsedSec, lastPlayedAt: playedIso }
+        : s
+    )));
+  }, []);
+
+  useEffect(() => {
+    if (screenStage !== 'launcher' || !social.authenticated || hydratedUserIdRef.current !== social.user?.id || !presence.fivem?.running) {
+      flushActivePlaytime();
+      if (!presence.fivem?.running) {
+        activePlaySessionRef.current = { serverId: '', lastCommittedAtMs: 0 };
+        lastLaunchedServerIdRef.current = '';
+      }
+      return undefined;
+    }
+
+    const candidateId = activePlaySessionRef.current.serverId || lastLaunchedServerIdRef.current || active?.id || '';
+    if (!candidateId || !serversRef.current.some(s => s.id === candidateId)) {
+      return undefined;
+    }
+
+    if (!activePlaySessionRef.current.serverId) {
+      const nowMs = Date.now();
+      activePlaySessionRef.current = { serverId: candidateId, lastCommittedAtMs: nowMs };
+      const startedIso = new Date(nowMs).toISOString();
+      setServers(prev => prev.map(s => (
+        s.id === candidateId ? { ...s, lastPlayedAt: startedIso } : s
+      )));
+    }
+
+    const timer = setInterval(() => flushActivePlaytime(), 60_000);
+    return () => clearInterval(timer);
+  }, [presence.fivem?.running, screenStage, social.authenticated, social.user?.id, active?.id, flushActivePlaytime]);
+
   const handleLogout = async () => {
     const prevUserId = social.user?.id;
+    clearTimeout(serverSyncTimerRef.current);
+    const sess = activePlaySessionRef.current;
+    let exportServers = serversRef.current;
+    if (sess.serverId && sess.lastCommittedAtMs) {
+      const nowMs = Date.now();
+      const elapsedSec = Math.floor((nowMs - sess.lastCommittedAtMs) / 1000);
+      if (elapsedSec >= 1) {
+        const playedIso = new Date(nowMs).toISOString();
+        exportServers = exportServers.map(s => (
+          s.id === sess.serverId
+            ? { ...s, playtimeSeconds: Math.max(0, Math.floor(Number(s.playtimeSeconds) || 0)) + elapsedSec, lastPlayedAt: playedIso }
+            : s
+        ));
+      }
+      activePlaySessionRef.current = { serverId: '', lastCommittedAtMs: 0 };
+      lastLaunchedServerIdRef.current = '';
+    }
+    if (prevUserId && hydratedUserIdRef.current === prevUserId) {
+      const dirtySig = buildServersSyncSignature(exportServers, activeIdRef.current);
+      if (dirtySig !== lastSyncedSigRef.current) {
+        try {
+          const payload = buildServersSyncPayload(exportServers, activeIdRef.current);
+          await syncUserServers(payload.servers, payload.activeServerId, settings.socialServerUrl);
+        } catch {}
+      }
+    }
     await logoutAccount(settings.socialServerUrl);
     if (prevUserId) clearUserChatCache(prevUserId);
+    hydratedUserIdRef.current = '';
+    lastSyncedSigRef.current = '';
+    setServers([]);
+    setActiveId('');
+    setNavStack([{ tab: 'general', serverId: '' }]);
+    setNavIndex(0);
     clearTimeout(modalTimer.current);
     setRealtimeAccessToken('');
     setVisibleModal(null);
@@ -832,7 +977,13 @@ export default function App() {
     try {
       attempt = historyStore.begin(target);
       const result = await prepareLaunch(target, preferences);
-      if (result.serverInfo) setServers(prev => prev.map(s => s.id === target.id && s.ip === target.ip ? { ...s, ...result.serverInfo } : s));
+      lastLaunchedServerIdRef.current = target.id;
+      const nowIso = new Date().toISOString();
+      setServers(prev => prev.map(s => (
+        s.id === target.id && s.ip === target.ip
+          ? { ...s, ...(result.serverInfo || {}), lastPlayedAt: nowIso }
+          : s
+      )));
       historyStore.finish(attempt, 'sent');
       setLaunchFeedback({ message: result.message, _seq: ++alertSeqRef.current });
       if (social.authenticated) {
@@ -871,8 +1022,48 @@ export default function App() {
   }, []);
 
   useDialogFocus(modal, () => { if (!confirmState) setModal(null); });
-  useEffect(() => { try { saveServers(servers); setStorageError(''); } catch { setStorageError('บันทึกข้อมูลไม่ได้ กรุณาอนุญาต browser storage การเปลี่ยนแปลงอาจหายเมื่อปิดหน้า'); } }, [servers]);
-  useEffect(() => { try { saveActiveServerId(activeId); } catch { setStorageError('บันทึกเซิร์ฟเวอร์ที่เลือกไม่ได้'); } }, [activeId]);
+  useEffect(() => {
+    const uid = social.user?.id;
+    if (!social.authenticated || !uid || hydratedUserIdRef.current !== uid) return;
+    try {
+      saveServers(servers, uid);
+      setStorageError('');
+    } catch {
+      setStorageError('บันทึกข้อมูลไม่ได้ กรุณาอนุญาต browser storage การเปลี่ยนแปลงอาจหายเมื่อปิดหน้า');
+    }
+  }, [servers, social.authenticated, social.user?.id]);
+
+  useEffect(() => {
+    const uid = social.user?.id;
+    if (!social.authenticated || !uid || hydratedUserIdRef.current !== uid) return;
+    try {
+      saveActiveServerId(activeId, uid);
+    } catch {
+      setStorageError('บันทึกเซิร์ฟเวอร์ที่เลือกไม่ได้');
+    }
+  }, [activeId, social.authenticated, social.user?.id]);
+
+  useEffect(() => {
+    const uid = social.user?.id;
+    if (!social.authenticated || !uid || hydratedUserIdRef.current !== uid) return;
+    const nextSig = buildServersSyncSignature(servers, activeId);
+    if (nextSig === lastSyncedSigRef.current) return;
+
+    clearTimeout(serverSyncTimerRef.current);
+    serverSyncTimerRef.current = setTimeout(async () => {
+      if (hydratedUserIdRef.current !== uid) return;
+      const payload = buildServersSyncPayload(serversRef.current, activeIdRef.current);
+      const sentSig = JSON.stringify(payload);
+      try {
+        await syncUserServers(payload.servers, payload.activeServerId, settings.socialServerUrl);
+        if (hydratedUserIdRef.current === uid) {
+          lastSyncedSigRef.current = sentSig;
+        }
+      } catch {}
+    }, 650);
+
+    return () => clearTimeout(serverSyncTimerRef.current);
+  }, [servers, activeId, social.authenticated, social.user?.id, settings.socialServerUrl]);
 
   useEffect(() => {
     if (!active) { setRefreshing(false); return; }
@@ -896,6 +1087,7 @@ export default function App() {
           iconSource: result.online ? (result.iconSource || null) : s.iconSource,
           bannerUrl: result.online ? (result.bannerUrl || null) : s.bannerUrl,
           connectingBannerUrl: result.online ? (result.connectingBannerUrl || null) : s.connectingBannerUrl,
+          lastOnlineAt: result.status === 'Online' ? (result.checkedAt || new Date().toISOString()) : (s.lastOnlineAt || null),
           checkedAt: result.checkedAt, queryError: result.error || null
         };
       }));
@@ -1303,6 +1495,7 @@ export default function App() {
               onDownloadLocalWhisper={handleDownloadLocalWhisper}
               onToggleVoiceOverlay={handleToggleVoiceOverlay}
               onRequestConfirm={requestConfirm}
+              playingServerId={presence.fivem?.running ? (activePlaySessionRef.current.serverId || lastLaunchedServerIdRef.current || active?.id || '') : ''}
               onNotify={(message, tone = 'notice') => setUiNotice({ message, tone, _seq: ++alertSeqRef.current })}
             />
           </div>

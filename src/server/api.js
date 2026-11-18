@@ -311,6 +311,7 @@ export function createApi(services = {}) {
       '/api/social/friend-favorite': 'POST',
       '/api/social/friend-remove': 'POST',
       '/api/social/server-favorite': 'POST',
+      '/api/social/servers-sync': 'POST',
       '/api/social/demo-seed': 'POST',
       '/api/social/game-invite': 'POST',
       '/api/social/game-invite-respond': 'POST',
@@ -388,7 +389,7 @@ export function createApi(services = {}) {
             headers.Cookie = req.headers.cookie;
           }
           const rawBody = isPost
-            ? await readBody(req, pathname === '/api/social/profile-update' ? 65536 : 8192)
+            ? await readBody(req, pathname === '/api/social/profile-update' || pathname === '/api/social/servers-sync' ? 65536 : 8192)
             : undefined;
           const body = rawBody !== undefined ? JSON.stringify(rawBody) : undefined;
           const upstream = await fetch(targetUrl, {
@@ -539,7 +540,8 @@ export function createApi(services = {}) {
           return send(res, 200, { success: true, users: social.searchUsers(userId, params.get('q') || '') });
         }
 
-        const body = await readBody(req, pathname === '/api/social/profile-update' ? 65536 : 8192);
+        const maxSocialBody = pathname === '/api/social/profile-update' || pathname === '/api/social/servers-sync' ? 65536 : 8192;
+        const body = await readBody(req, maxSocialBody);
         if (pathname === '/api/social/change-password') {
           return send(res, 200, { success: true, ...social.changePassword(userId, body) });
         }
@@ -568,6 +570,10 @@ export function createApi(services = {}) {
         if (pathname === '/api/social/server-favorite') {
           const result = social.toggleFavoriteServer(userId, body.server, body.favorite);
           return send(res, 200, { success: true, ...result });
+        }
+        if (pathname === '/api/social/servers-sync') {
+          const result = social.syncUserServers(userId, body);
+          return send(res, 200, { success: true, mode: 'local-sqlite', ...result });
         }
         if (pathname === '/api/social/demo-seed') {
           return send(res, 200, { success: true, ...social.seedDemoFriendsForUser(userId) });

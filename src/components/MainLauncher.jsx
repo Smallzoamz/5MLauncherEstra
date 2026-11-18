@@ -11,8 +11,10 @@ import PatchNewsSection from './PatchNewsSection';
 import AddonsHub from './AddonsHub';
 import { APP_VERSION } from '../shared/patcherConfig';
 import { SERVER_TAGS, DEFAULT_SERVER_TAG, normalizeServerTag } from '../shared/serverTags';
+import { formatDetailedDurationThai, formatLastPlayedLabel, formatPlaytimeSteam } from '../shared/durationFormat';
 import {
   BookOpen,
+  Clock,
   Play,
   ArrowUpRight,
   Plus,
@@ -73,6 +75,7 @@ export default function MainLauncher({
   onDownloadLocalWhisper,
   onToggleVoiceOverlay,
   onRequestConfirm,
+  playingServerId = '',
   onNotify,
   busy,
   onLaunch
@@ -83,8 +86,13 @@ export default function MainLauncher({
   const [bannerDraft, setBannerDraft] = useState(server?.customBannerUrl || '');
   const [bannerError, setBannerError] = useState('');
   const [presence, setPresence] = useState(presenceService.getPresence());
+  const [nowTick, setNowTick] = useState(() => Date.now());
 
   useEffect(() => presenceService.subscribe(setPresence), []);
+  useEffect(() => {
+    const timer = setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
   useEffect(() => {
     setEditing(false);
     setIp(server?.ip || '');
@@ -238,6 +246,12 @@ export default function MainLauncher({
       f.currentServer &&
       (f.currentServer.id === server.id || f.currentServer.ip === server.ip)
   );
+  const isPlayingThisCity = !!playingServerId && playingServerId === server.id;
+  const steamPlaytime = formatPlaytimeSteam(server.playtimeSeconds);
+  const lastPlayedText = formatLastPlayedLabel(server.lastPlayedAt, isPlayingThisCity, nowTick);
+  const serverOfflineDuration = server.status === 'Offline' && server.lastOnlineAt
+    ? formatDetailedDurationThai(server.lastOnlineAt, nowTick, { underMinuteText: 'ไม่ถึง 1 นาที' })
+    : '';
 
   const resumeCities = [...servers]
     .sort((a, b) => {
@@ -370,7 +384,7 @@ export default function MainLauncher({
                   {server.status === 'Online'
                     ? `Online · ${server.onlinePlayers ?? 0}/${server.maxPlayers ?? '—'}${occupancy != null ? ` (${occupancy}%)` : ''}`
                     : server.status === 'Offline'
-                      ? 'Offline'
+                      ? (serverOfflineDuration ? `Offline · มาแล้ว ${serverOfflineDuration}` : 'Offline')
                       : 'กำลังรอตรวจสถานะ'}
                 </span>
                 {server.gameBuild && <span className="hero-spec-badge">Build {server.gameBuild}</span>}
@@ -380,6 +394,18 @@ export default function MainLauncher({
               <p className="hero-description">
                 เรื่องราวต่อไปของคุณ เริ่มต้นที่นี่ · <span className="hero-ip-inline">{server.ip}</span>
               </p>
+
+              <div className="hero-steam-stats" aria-label="สถิติการเล่นเมืองนี้">
+                <div className="hero-stat-item" title={steamPlaytime.full}>
+                  <span className="hero-stat-label"><Clock size={12} /> เวลาเล่นทั้งหมด</span>
+                  <strong className="hero-stat-value">{steamPlaytime.short}</strong>
+                </div>
+                <div className="hero-stat-divider" aria-hidden="true" />
+                <div className="hero-stat-item" title={server.lastPlayedAt ? new Date(server.lastPlayedAt).toLocaleString('th-TH') : 'ยังไม่เคยเข้าเมืองนี้'}>
+                  <span className="hero-stat-label">เล่นล่าสุด</span>
+                  <strong className={`hero-stat-value${isPlayingThisCity ? ' playing-now' : ''}`}>{lastPlayedText}</strong>
+                </div>
+              </div>
 
               <div className="hero-actions">
                 <button
@@ -479,7 +505,10 @@ export default function MainLauncher({
                       </div>
                       <div className="resume-city-bottom">
                         <strong>{city.name}</strong>
-                        <small>{city.tag || 'FiveM'} · {city.status === 'Online' && city.onlinePlayers != null ? `${city.onlinePlayers}/${city.maxPlayers}` : city.ip}</small>
+                        <small>
+                          {city.tag || 'FiveM'} · {city.status === 'Online' && city.onlinePlayers != null ? `${city.onlinePlayers}/${city.maxPlayers}` : city.ip}
+                          {city.playtimeSeconds > 0 ? ` · ${formatPlaytimeSteam(city.playtimeSeconds).short}` : ''}
+                        </small>
                       </div>
                     </button>
                     <button

@@ -33,6 +33,10 @@ struct StoredUser {
     current_server_id: Option<String>,
     current_server_name: Option<String>,
     current_server_ip: Option<String>,
+    #[serde(default)]
+    active_server_id: Option<String>,
+    #[serde(default)]
+    servers_synced: bool,
     created_at: String,
 }
 
@@ -60,6 +64,28 @@ struct StoredFavoriteServer {
     ip: String,
     tag: String,
     created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct StoredUserServer {
+    user_id: String,
+    id: String,
+    name: String,
+    ip: String,
+    tag: String,
+    in_game_name: String,
+    custom_banner_url: String,
+    cl2: bool,
+    favorite: bool,
+    patch_manifest_url: String,
+    directory_slug: String,
+    last_fetched_name: String,
+    #[serde(default)]
+    playtime_seconds: u64,
+    #[serde(default)]
+    last_played_at: Option<String>,
+    sort_order: usize,
+    updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +123,8 @@ struct LocalSocialDb {
     game_invites: Vec<StoredGameInvite>,
     #[serde(default)]
     direct_messages: Vec<StoredDirectMessage>,
+    #[serde(default)]
+    user_servers: Vec<StoredUserServer>,
     active_user_id: Option<String>,
 }
 
@@ -334,6 +362,7 @@ fn public_user(u: &StoredUser, now: u64, include_private: bool) -> Value {
         "avatarUrl": u.avatar_url.clone().unwrap_or_default(),
         "presence": presence,
         "isDemo": u.is_demo,
+        "lastSeenAt": if u.last_seen_ms > 0 { json!(u.last_seen_ms) } else { Value::Null },
         "currentServer": current_server,
     });
     if include_private {
@@ -356,6 +385,198 @@ fn user_favorite_servers(db: &LocalSocialDb, user_id: &str) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+fn sanitize_http_url(raw: &str) -> String {
+    let val: String = raw.trim().chars().take(500).collect();
+    if val.is_empty() {
+        return String::new();
+    }
+    if let Ok(parsed) = Url::parse(&val) {
+        let scheme = parsed.scheme();
+        if (scheme == "http" || scheme == "https") && parsed.host_str().is_some() {
+            return val;
+        }
+    }
+    String::new()
+}
+
+fn user_saved_servers(db: &LocalSocialDb, user_id: &str) -> Vec<Value> {
+    let mut rows: Vec<&StoredUserServer> = db
+        .user_servers
+        .iter()
+        .filter(|s| s.user_id == user_id)
+        .collect();
+    rows.sort_by_key(|s| s.sort_order);
+    rows.into_iter()
+        .map(|s| {
+            json!({
+                "id": s.id,
+                "name": s.name,
+                "ip": s.ip,
+                "tag": s.tag,
+                "inGameName": s.in_game_name,
+                "customBannerUrl": s.custom_banner_url,
+                "cl2": s.cl2,
+                "favorite": s.favorite,
+                "patchManifestUrl": s.patch_manifest_url,
+                "directorySlug": s.directory_slug,
+                "lastFetchedName": s.last_fetched_name,
+                "playtimeSeconds": s.playtime_seconds,
+                "lastPlayedAt": s.last_played_at,
+                "updatedAt": s.updated_at,
+            })
+        })
+        .collect()
+}
+
+fn sync_user_servers_in_db(db: &mut LocalSocialDb, user_id: &str, body: &Value) -> Result<(), String> {
+    let raw_servers = match body.get("servers") {
+        Some(v) => v
+            .as_array()
+            .ok_or_else(|| "รูปแบบข้อมูลเซิร์ฟเวอร์ไม่ถูกต้อง".to_string())?
+            .clone(),
+        None => Vec::new(),
+    };
+    if raw_servers.len() > 200 {
+        return Err("จำนวนเซิร์ฟเวอร์ต้องไม่เกิน 200 รายการ".to_string());
+    }
+
+    let active_sid: String = body["activeServerId"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .chars()
+        .take(100)
+        .collect();
+    let timestamp = now_iso();
+
+    db.user_servers.retain(|s| s.user_id != user_id);
+    db.favorite_servers.retain(|s| s.user_id != user_id);
+
+    let mut seen = HashSet::new();
+    let mut idx = 0usize;
+    for item in raw_servers {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        let sid: String = obj
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .chars()
+            .take(100)
+            .collect();
+        if sid.is_empty() || !seen.insert(sid.clone()) {
+            continue;
+        }
+        let sname_raw: String = obj
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .chars()
+            .take(100)
+            .collect();
+        let sname = if sname_raw.is_empty() {
+            sid.clone()
+        } else {
+            sname_raw
+        };
+        let sip: String = obj
+            .get("ip")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .chars()
+            .take(253)
+            .collect();
+        let stag: String = obj
+            .get("tag")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .chars()
+            .take(40)
+            .collect();
+        let fav = obj.get("favorite").and_then(|v| v.as_bool()).unwrap_or(false);
+
+        db.user_servers.push(StoredUserServer {
+            user_id: user_id.to_string(),
+            id: sid.clone(),
+            name: sname.clone(),
+            ip: sip.clone(),
+            tag: stag.clone(),
+            in_game_name: obj
+                .get("inGameName")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .chars()
+                .take(80)
+                .collect(),
+            custom_banner_url: sanitize_http_url(
+                obj.get("customBannerUrl").and_then(|v| v.as_str()).unwrap_or(""),
+            ),
+            cl2: obj.get("cl2").and_then(|v| v.as_bool()).unwrap_or(false),
+            favorite: fav,
+            patch_manifest_url: sanitize_http_url(
+                obj.get("patchManifestUrl").and_then(|v| v.as_str()).unwrap_or(""),
+            ),
+            directory_slug: obj
+                .get("directorySlug")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .chars()
+                .take(100)
+                .collect(),
+            last_fetched_name: obj
+                .get("lastFetchedName")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .chars()
+                .take(100)
+                .collect(),
+            playtime_seconds: obj
+                .get("playtimeSeconds")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+                .min(315_360_000),
+            last_played_at: obj
+                .get("lastPlayedAt")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().chars().take(64).collect::<String>())
+                .filter(|s| !s.is_empty()),
+            sort_order: idx,
+            updated_at: timestamp.clone(),
+        });
+
+        if fav {
+            db.favorite_servers.push(StoredFavoriteServer {
+                user_id: user_id.to_string(),
+                id: sid.clone(),
+                name: sname,
+                ip: if sip.is_empty() { sid } else { sip },
+                tag: stag,
+                created_at: timestamp.clone(),
+            });
+        }
+        idx += 1;
+    }
+
+    if let Some(u) = db.users.iter_mut().find(|u| u.id == user_id) {
+        u.active_server_id = if active_sid.is_empty() {
+            None
+        } else {
+            Some(active_sid)
+        };
+        u.servers_synced = true;
+    }
+
+    Ok(())
 }
 
 fn build_social_state(db: &LocalSocialDb, user_id: &str) -> Result<Value, String> {
@@ -462,6 +683,9 @@ fn build_social_state(db: &LocalSocialDb, user_id: &str) -> Result<Value, String
         "mode": "local-desktop",
         "user": public_user(me, now, true),
         "favoriteServers": user_favorite_servers(db, user_id),
+        "savedServers": user_saved_servers(db, user_id),
+        "activeServerId": me.active_server_id.clone().unwrap_or_default(),
+        "hasSyncedServers": me.servers_synced,
         "friends": friends,
         "incomingRequests": incoming,
         "outgoingRequests": outgoing,
@@ -553,6 +777,7 @@ fn handle_local(state: &SocialState, path: &str, body: Value) -> Result<Value, S
                 current_server_name: None,
                 current_server_ip: None,
                 created_at: now_iso(),
+                ..Default::default()
             };
             let uid = user.id.clone();
             db.users.push(user.clone());
@@ -906,11 +1131,24 @@ fn handle_local(state: &SocialState, path: &str, body: Value) -> Result<Value, S
                     } else if let Some(pos) = exists {
                         db.favorite_servers.remove(pos);
                     }
+                    if let Some(us) = db
+                        .user_servers
+                        .iter_mut()
+                        .find(|s| s.user_id == uid && s.id == sid)
+                    {
+                        us.favorite = want;
+                        us.updated_at = now_iso();
+                    }
                     save_db(&db)?;
                     Ok(json!({
                         "success": true,
                         "favoriteServers": user_favorite_servers(&db, &uid),
                     }))
+                }
+                "/api/social/servers-sync" => {
+                    sync_user_servers_in_db(&mut db, &uid, &body)?;
+                    save_db(&db)?;
+                    build_social_state(&db, &uid)
                 }
                 "/api/social/demo-seed" => {
                     let samples = [
@@ -936,6 +1174,7 @@ fn handle_local(state: &SocialState, path: &str, body: Value) -> Result<Value, S
                                 current_server_name: srv.map(|s| s.1.to_string()),
                                 current_server_ip: srv.map(|s| s.2.to_string()),
                                 created_at: now_iso(),
+                                ..Default::default()
                             });
                         }
                         if !db
@@ -1274,4 +1513,66 @@ pub async fn social_request(
     }
 
     handle_local(state, &path, body.unwrap_or_else(|| json!({})))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_user_servers_isolates_accounts_and_sanitizes_urls() {
+        let mut db = LocalSocialDb::default();
+        db.users.push(StoredUser {
+            id: "u1".to_string(),
+            username: "alpha".to_string(),
+            display_name: "Alpha".to_string(),
+            ..Default::default()
+        });
+        db.users.push(StoredUser {
+            id: "u2".to_string(),
+            username: "beta".to_string(),
+            display_name: "Beta".to_string(),
+            ..Default::default()
+        });
+
+        let payload = json!({
+            "activeServerId": "srv-1",
+            "servers": [
+                {
+                    "id": "srv-1",
+                    "name": "City One",
+                    "ip": "1.2.3.4:30120",
+                    "tag": "RP",
+                    "inGameName": "Alice",
+                    "customBannerUrl": "https://example.com/banner.jpg",
+                    "patchManifestUrl": "javascript:alert(1)",
+                    "cl2": true,
+                    "favorite": true,
+                    "directorySlug": "city-one",
+                    "lastFetchedName": "City One Live",
+                    "playtimeSeconds": 9000,
+                    "lastPlayedAt": "2026-11-18T10:00:00Z"
+                }
+            ]
+        });
+
+        sync_user_servers_in_db(&mut db, "u1", &payload).expect("sync u1");
+        let s1 = build_social_state(&db, "u1").expect("state u1");
+        let s2 = build_social_state(&db, "u2").expect("state u2");
+
+        assert_eq!(s1["hasSyncedServers"], json!(true));
+        assert_eq!(s1["activeServerId"], json!("srv-1"));
+        assert_eq!(s1["savedServers"].as_array().unwrap().len(), 1);
+        assert_eq!(s1["savedServers"][0]["inGameName"], json!("Alice"));
+        assert_eq!(s1["savedServers"][0]["customBannerUrl"], json!("https://example.com/banner.jpg"));
+        assert_eq!(s1["savedServers"][0]["patchManifestUrl"], json!(""));
+        assert_eq!(s1["savedServers"][0]["playtimeSeconds"], json!(9000));
+        assert_eq!(s1["savedServers"][0]["lastPlayedAt"], json!("2026-11-18T10:00:00Z"));
+        assert_eq!(s1["favoriteServers"].as_array().unwrap().len(), 1);
+
+        assert_eq!(s2["hasSyncedServers"], json!(false));
+        assert_eq!(s2["activeServerId"], json!(""));
+        assert_eq!(s2["savedServers"].as_array().unwrap().len(), 0);
+        assert_eq!(s2["favoriteServers"].as_array().unwrap().len(), 0);
+    }
 }

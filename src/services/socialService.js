@@ -62,6 +62,10 @@ export async function toggleRemoteFavoriteServer(server, favorite, socialServerU
   return apiPost('/api/social/server-favorite', { server, favorite }, socialHeaders(socialServerUrl));
 }
 
+export async function syncUserServers(servers, activeServerId, socialServerUrl) {
+  return apiPost('/api/social/servers-sync', { servers, activeServerId }, socialHeaders(socialServerUrl));
+}
+
 export async function searchSocialUsers(query, socialServerUrl) {
   return apiGet(`/api/social/search?q=${encodeURIComponent(query || '')}`, undefined, socialHeaders(socialServerUrl));
 }

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { AVATAR_PALETTE, validateAvatarUrl } from '../shared/profileAvatar.js';
+import { MAX_USER_SERVERS, sanitizeSyncServerList } from '../shared/userServersSync.js';
 
 const ONLINE_WINDOW_MS = 45_000;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -211,6 +212,26 @@ export function createSocialStore(options = {}) {
     CREATE INDEX IF NOT EXISTS idx_dm_pair ON direct_messages(pair_key, id DESC);
     CREATE INDEX IF NOT EXISTS idx_dm_unread ON direct_messages(recipient_id, sender_id, read_at);
     CREATE INDEX IF NOT EXISTS idx_dm_expires ON direct_messages(expires_at);
+    CREATE TABLE IF NOT EXISTS user_servers (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      server_id TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      ip TEXT NOT NULL DEFAULT '',
+      tag TEXT NOT NULL DEFAULT '',
+      in_game_name TEXT NOT NULL DEFAULT '',
+      custom_banner_url TEXT NOT NULL DEFAULT '',
+      cl2 INTEGER NOT NULL DEFAULT 0,
+      favorite INTEGER NOT NULL DEFAULT 0,
+      patch_manifest_url TEXT NOT NULL DEFAULT '',
+      directory_slug TEXT NOT NULL DEFAULT '',
+      last_fetched_name TEXT NOT NULL DEFAULT '',
+      playtime_seconds INTEGER NOT NULL DEFAULT 0,
+      last_played_at TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(user_id, server_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_servers_order ON user_servers(user_id, sort_order ASC, updated_at ASC);
   `);
 
   const userCols = db.prepare('PRAGMA table_info(users)').all();
@@ -219,6 +240,19 @@ export function createSocialStore(options = {}) {
   }
   if (!userCols.some(col => col.name === 'must_change_password')) {
     db.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!userCols.some(col => col.name === 'active_server_id')) {
+    db.exec('ALTER TABLE users ADD COLUMN active_server_id TEXT');
+  }
+  if (!userCols.some(col => col.name === 'servers_synced_at')) {
+    db.exec('ALTER TABLE users ADD COLUMN servers_synced_at TEXT');
+  }
+  const userServerCols = db.prepare('PRAGMA table_info(user_servers)').all();
+  if (!userServerCols.some(col => col.name === 'playtime_seconds')) {
+    db.exec('ALTER TABLE user_servers ADD COLUMN playtime_seconds INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!userServerCols.some(col => col.name === 'last_played_at')) {
+    db.exec('ALTER TABLE user_servers ADD COLUMN last_played_at TEXT');
   }
 
   function createSessionForUser(userId) {
@@ -234,6 +268,31 @@ export function createSocialStore(options = {}) {
     return db.prepare(
       'SELECT server_id AS id, server_name AS name, server_ip AS ip, server_tag AS tag, created_at AS createdAt FROM favorite_servers WHERE user_id = ? ORDER BY created_at DESC'
     ).all(userId);
+  }
+
+  function getUserSavedServers(userId) {
+    return db.prepare(
+      `SELECT server_id, name, ip, tag, in_game_name, custom_banner_url, cl2, favorite,
+              patch_manifest_url, directory_slug, last_fetched_name, playtime_seconds, last_played_at, updated_at
+       FROM user_servers
+       WHERE user_id = ?
+       ORDER BY sort_order ASC, updated_at ASC`
+    ).all(userId).map(r => ({
+      id: r.server_id,
+      name: r.name || r.server_id,
+      ip: r.ip || '',
+      tag: r.tag || '',
+      inGameName: r.in_game_name || '',
+      customBannerUrl: r.custom_banner_url || '',
+      cl2: !!r.cl2,
+      favorite: !!r.favorite,
+      patchManifestUrl: r.patch_manifest_url || '',
+      directorySlug: r.directory_slug || '',
+      lastFetchedName: r.last_fetched_name || '',
+      playtimeSeconds: Math.max(0, Number(r.playtime_seconds) || 0),
+      lastPlayedAt: r.last_played_at || null,
+      updatedAt: r.updated_at || null
+    }));
   }
 
   function resolveSession(token) {
@@ -459,6 +518,9 @@ export function createSocialStore(options = {}) {
     return {
       user: toPublicUser(userRow, now, true),
       favoriteServers: getUserFavoriteServers(userId),
+      savedServers: getUserSavedServers(userId),
+      activeServerId: userRow.active_server_id || '',
+      hasSyncedServers: !!userRow.servers_synced_at,
       friends,
       unreadMessages,
       incomingRequests: incomingRows.map(r => ({
@@ -693,6 +755,7 @@ export function createSocialStore(options = {}) {
     const serverId = server.id.trim().slice(0, 100);
     const exists = db.prepare('SELECT server_id FROM favorite_servers WHERE user_id = ? AND server_id = ?').get(userId, serverId);
     const shouldFav = favorite === undefined ? !exists : !!favorite;
+    const nowIso = new Date().toISOString();
     if (shouldFav) {
       db.prepare(`
         INSERT INTO favorite_servers (user_id, server_id, server_name, server_ip, server_tag, created_at)
@@ -704,12 +767,83 @@ export function createSocialStore(options = {}) {
         String(server.name || serverId).slice(0, 100),
         String(server.ip || '').slice(0, 253),
         String(server.tag || '').slice(0, 40),
-        new Date().toISOString()
+        nowIso
       );
     } else {
       db.prepare('DELETE FROM favorite_servers WHERE user_id = ? AND server_id = ?').run(userId, serverId);
     }
+    db.prepare('UPDATE user_servers SET favorite = ?, updated_at = ? WHERE user_id = ? AND server_id = ?')
+      .run(shouldFav ? 1 : 0, nowIso, userId, serverId);
     return { success: true, favoriteServers: getUserFavoriteServers(userId) };
+  }
+
+  function syncUserServers(userId, payload = {}) {
+    if (payload && payload.servers !== undefined && !Array.isArray(payload.servers)) {
+      throw Object.assign(new Error('รูปแบบข้อมูลเซิร์ฟเวอร์ไม่ถูกต้อง'), { status: 400 });
+    }
+    const rawList = Array.isArray(payload?.servers) ? payload.servers : [];
+    if (rawList.length > MAX_USER_SERVERS) {
+      throw Object.assign(new Error(`จำนวนเซิร์ฟเวอร์ต้องไม่เกิน ${MAX_USER_SERVERS} รายการ`), { status: 400 });
+    }
+    const cleaned = sanitizeSyncServerList(rawList);
+    const activeServerId = String(payload?.activeServerId || '').trim().slice(0, 100);
+    const nowIso = new Date().toISOString();
+
+    db.exec('BEGIN');
+    try {
+      db.prepare('DELETE FROM user_servers WHERE user_id = ?').run(userId);
+      db.prepare('DELETE FROM favorite_servers WHERE user_id = ?').run(userId);
+
+      const insertServer = db.prepare(`
+        INSERT INTO user_servers (
+          user_id, server_id, name, ip, tag, in_game_name,
+          custom_banner_url, cl2, favorite, patch_manifest_url,
+          directory_slug, last_fetched_name, playtime_seconds, last_played_at, sort_order, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const insertFav = db.prepare(`
+        INSERT INTO favorite_servers (user_id, server_id, server_name, server_ip, server_tag, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, server_id) DO UPDATE SET
+          server_name = excluded.server_name,
+          server_ip = excluded.server_ip,
+          server_tag = excluded.server_tag
+      `);
+
+      cleaned.forEach((srv, idx) => {
+        insertServer.run(
+          userId,
+          srv.id,
+          srv.name,
+          srv.ip,
+          srv.tag,
+          srv.inGameName,
+          srv.customBannerUrl,
+          srv.cl2 ? 1 : 0,
+          srv.favorite ? 1 : 0,
+          srv.patchManifestUrl,
+          srv.directorySlug,
+          srv.lastFetchedName,
+          srv.playtimeSeconds,
+          srv.lastPlayedAt,
+          idx,
+          nowIso
+        );
+        if (srv.favorite) {
+          insertFav.run(userId, srv.id, srv.name, srv.ip || srv.id, srv.tag, nowIso);
+        }
+      });
+
+      db.prepare('UPDATE users SET active_server_id = ?, servers_synced_at = ? WHERE id = ?')
+        .run(activeServerId || null, nowIso, userId);
+
+      db.exec('COMMIT');
+    } catch (err) {
+      try { db.exec('ROLLBACK'); } catch {}
+      throw err;
+    }
+
+    return { success: true, ...getSocialState(userId) };
   }
 
   function searchUsers(userId, query) {
@@ -824,6 +958,7 @@ export function createSocialStore(options = {}) {
     toggleFavoriteFriend,
     removeFriend,
     toggleFavoriteServer,
+    syncUserServers,
     searchUsers,
     seedDemoFriendsForUser,
     sendGameInvite,

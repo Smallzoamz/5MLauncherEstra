@@ -14,14 +14,15 @@ import {
 } from 'lucide-react';
 import { UserAvatar } from './UserAvatar';
 import FriendChatPanel from './FriendChatPanel';
+import { formatOfflineDurationLabel } from '../shared/durationFormat';
 
-function presenceLabel(friend) {
+function presenceLabel(friend, nowMs = Date.now()) {
   if (friend.presence === 'in-game' && friend.currentServer?.name) {
     return `เล่น ${friend.currentServer.name}`;
   }
   if (friend.presence === 'online') return 'ออนไลน์บน Estra';
   if (friend.presence === 'away') return 'ไม่อยู่ชั่วคราว';
-  return 'ออฟไลน์';
+  return formatOfflineDurationLabel(friend.lastSeenAt, nowMs);
 }
 
 export default function FriendsSidebar({
@@ -56,6 +57,12 @@ export default function FriendsSidebar({
   const [busy, setBusy] = useState(false);
   const [favOpen, setFavOpen] = useState(true);
   const [friendsOpen, setFriendsOpen] = useState(true);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
 
   const user = social?.authenticated ? social.user : null;
   const friends = social?.friends || [];
@@ -338,6 +345,7 @@ export default function FriendsSidebar({
                         <FriendRow
                           key={friend.id}
                           friend={friend}
+                          nowTick={nowTick}
                           unreadCount={Number(unreadMessages[friend.id] || 0)}
                           canChat={!friend.isDemo && typeof onFetchChatHistory === 'function'}
                           canInvite={!!activeServer?.ip && !friend.isDemo && friend.presence !== 'offline' && typeof onInviteFriend === 'function'}
@@ -397,6 +405,7 @@ export default function FriendsSidebar({
                         <FriendRow
                           key={friend.id}
                           friend={friend}
+                          nowTick={nowTick}
                           unreadCount={Number(unreadMessages[friend.id] || 0)}
                           canChat={!friend.isDemo && typeof onFetchChatHistory === 'function'}
                           canInvite={!!activeServer?.ip && !friend.isDemo && friend.presence !== 'offline' && typeof onInviteFriend === 'function'}
@@ -526,7 +535,8 @@ export default function FriendsSidebar({
   );
 }
 
-function FriendRow({ friend, unreadCount = 0, canChat = false, canInvite, activeServerName, onOpenChat, onToggleFavorite, onRemove, onJoin, onInvite }) {
+function FriendRow({ friend, nowTick, unreadCount = 0, canChat = false, canInvite, activeServerName, onOpenChat, onToggleFavorite, onRemove, onJoin, onInvite }) {
+  const statusText = presenceLabel(friend, nowTick);
   return (
     <li className={`friend-row ${friend.presence}`}>
       <UserAvatar user={friend} showPresence />
@@ -535,7 +545,7 @@ function FriendRow({ friend, unreadCount = 0, canChat = false, canInvite, active
           <span>{friend.displayName}</span>
           {friend.isDemo && <span className="demo-tag">DEMO</span>}
         </strong>
-        <small title={presenceLabel(friend)}>{presenceLabel(friend)}</small>
+        <small title={statusText}>{statusText}</small>
       </div>
       <div className="friend-row-actions">
         {canChat && (

@@ -510,3 +510,109 @@ test('bounded direct messages enforce friendship, 50-msg rolling cap, 7-day TTL 
   clearUserChatCache('userA');
   assert.equal(loadCachedChat('userA', 'friendB').length, 0);
 });
+
+test('socialStore.syncUserServers and /api/social/servers-sync persist per-user servers cleanly and isolate users', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'estra-user-servers-'));
+  const dbPath = path.join(dir, 'social.db');
+  const store = createSocialStore({ dbPath });
+  const middleware = createApi({ socialStore: store });
+  const server = http.createServer(middleware);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    await new Promise(resolve => server.close(resolve));
+    store.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const { token } = await fetch(`${base}/api/session`).then(r => r.json());
+
+  // Unauthenticated sync rejected with 401
+  const unauthRes = await fetch(`${base}/api/social/servers-sync`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Launcher-Token': token, 'X-Social-Server': LOCAL_SOCIAL_SENTINEL },
+    body: JSON.stringify({ servers: [] })
+  });
+  assert.equal(unauthRes.status, 401);
+
+  const regAlice = await fetch(`${base}/api/social/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Launcher-Token': token, 'X-Social-Server': LOCAL_SOCIAL_SENTINEL },
+    body: JSON.stringify({ username: 'srv_alice', password: 'password123', displayName: 'Alice' })
+  });
+  const aliceCookie = regAlice.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
+
+  const regBob = await fetch(`${base}/api/social/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Launcher-Token': token, 'X-Social-Server': LOCAL_SOCIAL_SENTINEL },
+    body: JSON.stringify({ username: 'srv_bob', password: 'password123', displayName: 'Bob' })
+  });
+  const bobCookie = regBob.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
+
+  // Alice syncs servers and per-server settings
+  const syncRes = await fetch(`${base}/api/social/servers-sync`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Launcher-Token': token, 'X-Social-Server': LOCAL_SOCIAL_SENTINEL, Cookie: aliceCookie },
+    body: JSON.stringify({
+      activeServerId: 'city-2',
+      servers: [
+        {
+          id: 'city-1',
+          name: 'City One',
+          ip: '10.0.0.1:30120',
+          tag: 'RP',
+          inGameName: 'AliceRP',
+          customBannerUrl: 'https://cdn.example.com/city1.jpg',
+          cl2: true,
+          favorite: true,
+          patchManifestUrl: 'javascript:alert(1)',
+          directorySlug: 'city-one',
+          lastFetchedName: 'City One Official',
+          playtimeSeconds: 5400,
+          lastPlayedAt: '2026-11-18T12:00:00.000Z'
+        },
+        {
+          id: 'city-2',
+          name: 'Training Arena',
+          ip: '10.0.0.2:30120',
+          tag: 'Training',
+          inGameName: '',
+          customBannerUrl: '',
+          cl2: false,
+          favorite: false,
+          patchManifestUrl: 'https://cdn.example.com/manifest.json'
+        }
+      ]
+    })
+  });
+  assert.equal(syncRes.status, 200);
+  const syncJson = await syncRes.json();
+  assert.equal(syncJson.hasSyncedServers, true);
+  assert.equal(syncJson.activeServerId, 'city-2');
+  assert.equal(syncJson.savedServers.length, 2);
+  assert.equal(syncJson.savedServers[0].customBannerUrl, 'https://cdn.example.com/city1.jpg');
+  assert.equal(syncJson.savedServers[0].patchManifestUrl, '');
+  assert.equal(syncJson.savedServers[0].playtimeSeconds, 5400);
+  assert.equal(syncJson.savedServers[0].lastPlayedAt, '2026-11-18T12:00:00.000Z');
+  assert.equal(syncJson.savedServers[1].patchManifestUrl, 'https://cdn.example.com/manifest.json');
+  assert.equal(syncJson.favoriteServers.length, 1);
+  assert.equal(syncJson.favoriteServers[0].id, 'city-1');
+
+  // Bob remains completely isolated
+  const bobState = await fetch(`${base}/api/social/state`, {
+    headers: { 'X-Social-Server': LOCAL_SOCIAL_SENTINEL, Cookie: bobCookie }
+  }).then(r => r.json());
+  assert.equal(bobState.hasSyncedServers, false);
+  assert.equal(bobState.activeServerId, '');
+  assert.deepEqual(bobState.savedServers, []);
+  assert.deepEqual(bobState.favoriteServers, []);
+
+  // Over 200 servers rejected cleanly
+  const tooMany = Array.from({ length: 201 }, (_, i) => ({ id: `s-${i}`, name: `S${i}`, ip: `1.1.1.${i}:30120` }));
+  const overRes = await fetch(`${base}/api/social/servers-sync`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Launcher-Token': token, 'X-Social-Server': LOCAL_SOCIAL_SENTINEL, Cookie: aliceCookie },
+    body: JSON.stringify({ servers: tooMany, activeServerId: 's-0' })
+  });
+  assert.equal(overRes.status, 400);
+});
