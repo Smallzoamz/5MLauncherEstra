@@ -10,7 +10,8 @@ export function buildOverlaySettingsPayload(settings) {
     enabled: settings?.overlayNotificationsEnabled !== false,
     notifyScreenshot: settings?.overlayNotifyScreenshot !== false,
     notifyFriendOnline: settings?.overlayNotifyFriendOnline !== false,
-    notifyFriendInGame: settings?.overlayNotifyFriendInGame !== false
+    notifyFriendInGame: settings?.overlayNotifyFriendInGame !== false,
+    notifyServerWatcher: settings?.overlayNotifyServerWatcher !== false
   };
 }
 
@@ -26,6 +27,7 @@ export function shouldDeliverOverlay(settings, kind, force = false) {
   if (kind === 'screenshot') return settings?.overlayNotifyScreenshot !== false;
   if (kind === 'friend-online') return settings?.overlayNotifyFriendOnline !== false;
   if (kind === 'friend-in-game') return settings?.overlayNotifyFriendInGame !== false;
+  if (kind === 'server-watcher') return settings?.overlayNotifyServerWatcher !== false;
   return true;
 }
 

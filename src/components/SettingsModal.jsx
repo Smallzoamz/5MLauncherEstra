@@ -175,7 +175,9 @@ export default function SettingsModal({ isOpen, onClose, settings, onSaveSetting
         ['runOnWindowsStartup', 'Run on Windows Start (เปิดอัตโนมัติใน System Tray + Low Priority)', 'เมื่อเปิดเครื่อง โปรแกรมจะรันแบบซ่อนใน System Tray ไม่เด้งขึ้นหน้าจอ และตั้งค่า Process Priority ของตัวเองเป็น Low'],
         ['checkMicBeforeLaunch', 'ตรวจสิทธิ์และเปิดไมโครโฟนก่อนเล่น', 'ตรวจว่าเปิดอุปกรณ์ได้ ส่วนคุณภาพเสียงให้ทดสอบในหน้าเช็คไมค์'],
         ['autoClearCacheBeforeLaunch', 'ล้างแคชก่อนเปิดเกม', 'ลบแคชเซิร์ฟเวอร์ทุกครั้งที่กดเล่น ต้องปิด FiveM ก่อน'],
-        ['requireSteamDiscordBeforeLaunch', 'กำหนดให้เปิด Steam และ Discord ก่อนเล่น', 'เปิดตัวเลือกนี้เมื่อเซิร์ฟเวอร์ของคุณกำหนดให้ใช้']
+        ['requireSteamDiscordBeforeLaunch', 'กำหนดให้เปิด Steam และ Discord ก่อนเล่น', 'เปิดตัวเลือกนี้เมื่อเซิร์ฟเวอร์ของคุณกำหนดให้ใช้'],
+        ['autoAnalyzeCrashAfterExit', 'วิเคราะห์ Crash Log อัตโนมัติหลัง FiveM ปิด', 'ตรวจหาไฟล์ crash dump และ CitizenFX_log หลังเกมปิด หากพบอาการเด้งจะเปิดหน้าแนะนำวิธีแก้ทันที'],
+        ['autoCleanModsForPureMode', 'สลับเป็น Clean Pure Mode อัตโนมัติเมื่อเข้าเมือง Pure Mode 1/2', 'เก็บไฟล์ mods/ และ plugins/ เข้าคลังปลอดภัยก่อนเข้าเมืองที่ห้ามลงม็อดโดยไม่ลบไฟล์เดิม']
       ].map(([key, title, help]) => <label className="setting-row" key={key}><span>{title}<small className="help-text">{help}</small></span><input type="checkbox" disabled={busy} checked={Boolean(form[key])} onChange={e => setForm({ ...form, [key]: e.target.checked })} /></label>)}
 
       <details className="configuration-panel patch-template-panel">
@@ -261,6 +263,10 @@ export default function SettingsModal({ isOpen, onClose, settings, onSaveSetting
           <label className="setting-row">
             <span>แจ้งเตือนเมื่อเพื่อนกำลังเข้าเมือง<small className="help-text">แสดงชื่อเพื่อนและชื่อเมือง FiveM ที่เพื่อนกำลังเข้าเล่น</small></span>
             <input type="checkbox" disabled={busy || form.overlayNotificationsEnabled === false} checked={form.overlayNotifyFriendInGame !== false} onChange={e => setForm({ ...form, overlayNotifyFriendInGame: e.target.checked })} />
+          </label>
+          <label className="setting-row">
+            <span>แจ้งเตือนเมื่อเมืองที่เฝ้ารีสตาร์ทเสร็จ / มีสล็อตว่าง<small className="help-text">เด้ง Overlay แจ้งเตือนจาก Server Watcher เพื่อกดเข้าเมืองได้ทันที</small></span>
+            <input type="checkbox" disabled={busy || form.overlayNotificationsEnabled === false} checked={form.overlayNotifyServerWatcher !== false} onChange={e => setForm({ ...form, overlayNotifyServerWatcher: e.target.checked })} />
           </label>
           <div className="settings-actions" style={{ justifyContent: 'flex-start', marginTop: 10 }}>
             <button

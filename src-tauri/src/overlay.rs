@@ -18,6 +18,8 @@ pub struct OverlaySettings {
     pub notify_friend_online: bool,
     #[serde(default = "default_true")]
     pub notify_friend_in_game: bool,
+    #[serde(default = "default_true")]
+    pub notify_server_watcher: bool,
 }
 
 fn default_true() -> bool {
@@ -31,6 +33,7 @@ impl Default for OverlaySettings {
             notify_screenshot: true,
             notify_friend_online: true,
             notify_friend_in_game: true,
+            notify_server_watcher: true,
         }
     }
 }
@@ -88,6 +91,7 @@ impl OverlayManager {
             "screenshot" => cfg.notify_screenshot,
             "friend-online" => cfg.notify_friend_online,
             "friend-in-game" => cfg.notify_friend_in_game,
+            "server-watcher" => cfg.notify_server_watcher,
             "schedule-alert" => true,
             _ => true,
         }
@@ -124,7 +128,9 @@ pub fn sanitize_overlay_payload(mut payload: OverlayNotificationPayload) -> Over
         payload.id = uuid::Uuid::new_v4().to_string();
     }
     payload.kind = match payload.kind.as_str() {
-        "screenshot" | "friend-online" | "friend-in-game" | "schedule-alert" => payload.kind,
+        "screenshot" | "friend-online" | "friend-in-game" | "schedule-alert" | "server-watcher" => {
+            payload.kind
+        }
         _ => "friend-online".to_string(),
     };
     payload.badge = payload.badge.trim().chars().take(48).collect();
@@ -374,12 +380,14 @@ mod tests {
             notify_screenshot: false,
             notify_friend_online: true,
             notify_friend_in_game: false,
+            notify_server_watcher: true,
         })
         .unwrap();
 
         assert!(!mgr.should_notify("screenshot"));
         assert!(mgr.should_notify("friend-online"));
         assert!(!mgr.should_notify("friend-in-game"));
+        assert!(mgr.should_notify("server-watcher"));
         assert!(mgr.should_notify("schedule-alert"));
     }
 

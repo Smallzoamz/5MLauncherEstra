@@ -4,12 +4,15 @@ import { parseTarget } from '../shared/target.js';
 import { validatePlayerName } from '../shared/playerName.js';
 import presenceService from './presenceService.js';
 import audioService from './audioService.js';
+import { getModPresetsState, resolvePresetSwitchForLaunch, switchModPreset } from './modPresetService.js';
 
 // Every UI and Tray launch goes through the same preflight and backend guards.
 export async function prepareLaunch(server, settings, dependencies = {}) {
   const { installation = path => apiGet(`/api/installation?path=${encodeURIComponent(path)}`),
     presence = () => presenceService.checkPresence(), mic = audioService,
-    cleanCache = cleanRealCache, dispatch = launchFiveM } = dependencies;
+    cleanCache = cleanRealCache, dispatch = launchFiveM,
+    loadModPresets = getModPresetsState, applyModPreset = switchModPreset,
+    onModPresetSwitched = null } = dependencies;
   parseTarget(server.ip);
   const requestedName = validatePlayerName(server.inGameName);
   await installation(settings.fivemPath);
@@ -22,11 +25,25 @@ export async function prepareLaunch(server, settings, dependencies = {}) {
     mic.stopMicStream();
     if (!check.success) throw new Error(`เปิดไมโครโฟนไม่ได้: ${check.error} — ตรวจสิทธิ์ไมค์หรือปิดการตรวจในการตั้งค่า`);
   }
+  let presetSwitchNote = '';
+  const fivemStopped = latest.fivem?.running === false;
+  if (fivemStopped && (server.modPresetId || settings.autoCleanModsForPureMode)) {
+    const modState = await loadModPresets(settings.fivemPath).catch(() => null);
+    const plan = resolvePresetSwitchForLaunch(server, settings, modState);
+    if (plan) {
+      const nextState = await applyModPreset(settings.fivemPath, plan.presetId);
+      onModPresetSwitched?.(nextState);
+      const switchedPreset = nextState?.presets?.find(p => p.id === plan.presetId);
+      presetSwitchNote = plan.reason === 'pure-guard'
+        ? ' • สลับเป็น Clean Pure Mode อัตโนมัติตาม Pure Mode ของเมือง'
+        : ` • สลับโปรไฟล์ม็อดเป็น "${switchedPreset?.name || plan.presetId}" แล้ว`;
+    }
+  }
   const skipCache = settings.autoClearCacheBeforeLaunch && server.cl2 && latest.fivem?.running !== false;
   if (settings.autoClearCacheBeforeLaunch && !skipCache) {
     const result = await cleanCache(settings); if (!result.success) throw new Error(result.error);
   }
   const result = await dispatch(server, settings);
   if (!result.success) throw new Error(result.error || 'ส่งคำสั่งเปิด FiveM ไม่สำเร็จ');
-  return { ...result, message: result.message + (skipCache ? ' • ข้ามการล้างแคชอัตโนมัติ เพื่อรักษาแคชของเกมที่อาจกำลังทำงานอยู่' : '') };
+  return { ...result, message: result.message + presetSwitchNote + (skipCache ? ' • ข้ามการล้างแคชอัตโนมัติ เพื่อรักษาแคชของเกมที่อาจกำลังทำงานอยู่' : '') };
 }

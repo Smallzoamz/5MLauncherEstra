@@ -1,7 +1,10 @@
+pub mod crash_analyzer;
 pub mod crp_overlay;
 pub mod file_safety;
 pub mod fivem;
 pub mod maintenance;
+pub mod mod_presets;
+pub mod network_diag;
 pub mod overlay;
 pub mod patcher;
 pub mod perf_overlay;
@@ -14,9 +17,15 @@ pub mod social;
 pub mod startup;
 pub mod voice_note;
 
+use crate::crash_analyzer::{analyze_crash_logs, CrashAnalysisReport, CrashServerContext};
 use crate::crp_overlay::{
     copy_text_to_clipboard_native, CrpAddonState, CrpOverlayConfig, CrpOverlayManager,
 };
+use crate::mod_presets::{
+    create_mod_preset, delete_mod_preset, get_mod_presets_state, open_mod_preset_folder,
+    switch_mod_preset, ModPresetsState,
+};
+use crate::network_diag::{probe_server_route, RouteDiagnosticsReport};
 use crate::fivem::{
     detect_game_environment, execute_real_clean_cache, install_fivem_bootstrap, query_live_server,
     resolve_installation, CleanCacheResult, FiveMInstallation, GameEnvironmentReport,
@@ -734,6 +743,107 @@ fn hide_voice_note_overlay_cmd(
     state.voice_note.toggle_overlay(&app, Some(false))
 }
 
+#[tauri::command]
+async fn analyze_crash_logs_cmd(
+    webview: tauri::Webview,
+    fivem_path: String,
+    since_unix_ms: Option<u64>,
+    server_ctx: Option<CrashServerContext>,
+) -> Result<CrashAnalysisReport, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    tokio::task::spawn_blocking(move || analyze_crash_logs(&fivem_path, since_unix_ms, server_ctx))
+        .await
+        .map_err(|_| "วิเคราะห์ Crash Log ไม่สำเร็จ".to_string())?
+}
+
+#[tauri::command]
+async fn get_mod_presets_cmd(
+    webview: tauri::Webview,
+    fivem_path: String,
+) -> Result<ModPresetsState, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    tokio::task::spawn_blocking(move || get_mod_presets_state(&fivem_path))
+        .await
+        .map_err(|_| "โหลดรายการโปรไฟล์ม็อดไม่สำเร็จ".to_string())?
+}
+
+#[tauri::command]
+async fn create_mod_preset_cmd(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    fivem_path: String,
+    name: String,
+    description: Option<String>,
+    clone_from_live: Option<bool>,
+) -> Result<ModPresetsState, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    let _guard = state
+        .mutation_lock
+        .try_lock()
+        .map_err(|_| "มีคำสั่งกำลังทำงาน กรุณารอสักครู่".to_string())?;
+    let desc = description.unwrap_or_default();
+    let clone_live = clone_from_live.unwrap_or(false);
+    tokio::task::spawn_blocking(move || create_mod_preset(&fivem_path, &name, &desc, clone_live))
+        .await
+        .map_err(|_| "สร้างโปรไฟล์ม็อดไม่สำเร็จ".to_string())?
+}
+
+#[tauri::command]
+async fn switch_mod_preset_cmd(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    fivem_path: String,
+    preset_id: String,
+) -> Result<ModPresetsState, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    let _guard = state
+        .mutation_lock
+        .try_lock()
+        .map_err(|_| "มีคำสั่งกำลังทำงาน กรุณารอสักครู่".to_string())?;
+    tokio::task::spawn_blocking(move || switch_mod_preset(&fivem_path, &preset_id))
+        .await
+        .map_err(|_| "สลับโปรไฟล์ม็อดไม่สำเร็จ".to_string())?
+}
+
+#[tauri::command]
+async fn delete_mod_preset_cmd(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    fivem_path: String,
+    preset_id: String,
+) -> Result<ModPresetsState, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    let _guard = state
+        .mutation_lock
+        .try_lock()
+        .map_err(|_| "มีคำสั่งกำลังทำงาน กรุณารอสักครู่".to_string())?;
+    tokio::task::spawn_blocking(move || delete_mod_preset(&fivem_path, &preset_id))
+        .await
+        .map_err(|_| "ลบโปรไฟล์ม็อดไม่สำเร็จ".to_string())?
+}
+
+#[tauri::command]
+async fn open_mod_preset_folder_cmd(
+    webview: tauri::Webview,
+    fivem_path: String,
+    preset_id: String,
+) -> Result<String, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    tokio::task::spawn_blocking(move || open_mod_preset_folder(&fivem_path, &preset_id))
+        .await
+        .map_err(|_| "เปิดโฟลเดอร์โปรไฟล์ม็อดไม่สำเร็จ".to_string())?
+}
+
+#[tauri::command]
+async fn probe_server_route_cmd(
+    webview: tauri::Webview,
+    target: String,
+    samples: Option<u8>,
+) -> Result<RouteDiagnosticsReport, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    probe_server_route(&target, samples).await
+}
+
 pub fn run() {
     let startup_args: Vec<String> = std::env::args().collect();
     let launched_autostart = is_autostart_arg(&startup_args);
@@ -914,6 +1024,13 @@ pub fn run() {
             download_local_whisper_cmd,
             toggle_voice_note_overlay_cmd,
             hide_voice_note_overlay_cmd,
+            analyze_crash_logs_cmd,
+            get_mod_presets_cmd,
+            create_mod_preset_cmd,
+            switch_mod_preset_cmd,
+            delete_mod_preset_cmd,
+            open_mod_preset_folder_cmd,
+            probe_server_route_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Estra FiveM Launcher");

@@ -9,16 +9,27 @@ import ServerAvatar from './ServerAvatar';
 import ScreenshotsGallery from './ScreenshotsGallery';
 import PatchNewsSection from './PatchNewsSection';
 import AddonsHub from './AddonsHub';
+import { CrashAdvisorContent } from './CrashAdvisorModal';
+import ModPresetPanel from './ModPresetPanel';
+import NetworkWatcherPanel from './NetworkWatcherPanel';
+import { CLEAN_PURE_PRESET_ID, evaluatePureModeCompatibility } from '../services/modPresetService';
 import { APP_VERSION } from '../shared/patcherConfig';
 import { SERVER_TAGS, DEFAULT_SERVER_TAG, normalizeServerTag } from '../shared/serverTags';
 import { formatDetailedDurationThai, formatLastPlayedLabel, formatPlaytimeSteam } from '../shared/durationFormat';
 import {
+  Activity,
+  BellOff,
+  BellRing,
   BookOpen,
   Clock,
+  FileWarning,
+  Layers,
   Play,
   ArrowUpRight,
   Plus,
+  Radio,
   RefreshCw,
+  ShieldAlert,
   SlidersHorizontal,
   ShieldCheck,
   Headphones,
@@ -29,7 +40,8 @@ import {
   Users,
   ChevronRight,
   History,
-  Sparkles
+  Sparkles,
+  Wifi
 } from 'lucide-react';
 
 export default function MainLauncher({
@@ -78,7 +90,36 @@ export default function MainLauncher({
   playingServerId = '',
   onNotify,
   busy,
-  onLaunch
+  onLaunch,
+  discoverSubTab = 'crash',
+  onChangeDiscoverSubTab,
+  crashReport = null,
+  crashScanning = false,
+  crashFixBusyId = '',
+  crashFixFeedback = null,
+  onScanCrashLogs,
+  onOpenCrashAdvisor,
+  onRunCrashFix,
+  modState = null,
+  modBusy = false,
+  onRefreshModPresets,
+  onCreateModPreset,
+  onSwitchModPreset,
+  onDeleteModPreset,
+  onOpenModPresetFolder,
+  onBindServerModPreset,
+  onToggleAutoCleanPure,
+  routeReport = null,
+  pingHistory = [],
+  routeProbing = false,
+  watcherMap = {},
+  watcherReadyAlert = null,
+  onProbeRoute,
+  onToggleWatcher,
+  onUpdateWatcher,
+  onRearmWatcher,
+  onQuickJoinWatchedServer,
+  onDismissWatcherAlert
 }) {
   const [editing, setEditing] = useState(false);
   const [ip, setIp] = useState(server?.ip || '');
@@ -262,6 +303,16 @@ export default function MainLauncher({
     })
     .slice(0, 3);
 
+  const isWatchingServer = Boolean(watcherMap?.[server.id]?.enabled);
+  const pureCompat = evaluatePureModeCompatibility(server, modState);
+  const activePresetObj = (modState?.presets || []).find(p => p.id === modState?.activePresetId) || null;
+  const fivemRunning = presence.fivem?.running === true;
+
+  const jumpToDiagnostics = subTab => {
+    onChangeDiscoverSubTab?.(subTab);
+    onChangeTab?.('discover');
+  };
+
   const openDetailsPanel = () => {
     if (centerTab === 'discover') {
       onChangeTab?.('general');
@@ -287,45 +338,166 @@ export default function MainLauncher({
         <section className="subtab-panel" aria-label="กิจกรรมและสถานะระบบ">
           <div className="subtab-banner">
             <div>
-              <span className="eyebrow">ACTIVITY &amp; SYSTEM</span>
-              <h2>กิจกรรมล่าสุด &amp; สถานะเครื่อง</h2>
-              <p>ตรวจสอบ Steam, Discord, FiveM process และประวัติการเข้าเมืองล่าสุดของคุณ</p>
+              <span className="eyebrow">ACTIVITY, DIAGNOSTICS &amp; TOOLS</span>
+              <h2>กิจกรรมระบบ · วิเคราะห์ Crash · ม็อด &amp; Watcher</h2>
+              <p>วิเคราะห์เกมเด้งอัตโนมัติ สลับโปรไฟล์ม็อดตาม Pure Mode และตรวจเส้นทาง/เฝ้ารีสตาร์ทเมือง</p>
             </div>
             <button type="button" className="soft-button" onClick={onOpenHistory}>
               <History size={15} /> ประวัติทั้งหมด ({historyEntries.length})
             </button>
           </div>
 
-          <div className="activity-grid">
-            <div className="activity-card">
-              <span className="eyebrow">PROCESS STATUS</span>
-              <ul>
-                <li>FiveM: <strong>{presence.fivem?.running ? 'กำลังทำงานอยู่' : presence.fivem?.running === false ? 'ปิดอยู่' : 'ไม่ทราบสถานะ'}</strong></li>
-                <li>Steam: <strong>{presence.steam?.running ? presence.steam.user?.displayName || 'เปิดอยู่' : 'ไม่ได้เปิด'}</strong></li>
-                <li>Discord: <strong>{presence.discord?.running ? presence.discord.user?.displayName || 'เปิดอยู่' : 'ไม่ได้เปิด'}</strong></li>
-              </ul>
-            </div>
-            <div className="activity-card">
-              <span className="eyebrow">RECENT LAUNCHES</span>
-              {historyEntries.length === 0 ? (
-                <p className="help-text">ยังไม่มีประวัติการกดเข้าเมือง</p>
-              ) : (
-                <ul>
-                  {historyEntries.slice(0, 4).map(entry => (
-                    <li key={entry.id}>
-                      <span>{entry.city?.name}</span>
-                      <strong>{entry.status === 'sent' ? 'ส่งคำสั่งแล้ว' : entry.status === 'failed' ? 'ไม่สำเร็จ' : entry.status}</strong>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+          <div className="diag-subtabs" role="tablist" aria-label="หมวดเครื่องมือระบบ">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={discoverSubTab === 'crash'}
+              className={`diag-subtab-btn${discoverSubTab === 'crash' ? ' active' : ''}`}
+              onClick={() => onChangeDiscoverSubTab?.('crash')}
+            >
+              <FileWarning size={14} /> Crash Advisor &amp; สถานะเครื่อง
+              {crashReport?.hasCrash && <span className="diag-dot danger" />}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={discoverSubTab === 'mods'}
+              className={`diag-subtab-btn${discoverSubTab === 'mods' ? ' active' : ''}`}
+              onClick={() => onChangeDiscoverSubTab?.('mods')}
+            >
+              <Layers size={14} /> โปรไฟล์ม็อด &amp; Pure Mode
+              {pureCompat.mismatch && <span className="diag-dot amber" />}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={discoverSubTab === 'watcher'}
+              className={`diag-subtab-btn${discoverSubTab === 'watcher' ? ' active' : ''}`}
+              onClick={() => onChangeDiscoverSubTab?.('watcher')}
+            >
+              <Wifi size={14} /> Watcher &amp; Ping/Route
+              {Object.values(watcherMap || {}).some(r => r?.enabled) && <span className="diag-dot emerald" />}
+            </button>
           </div>
+
+          {discoverSubTab === 'crash' && (
+            <>
+              <div className="diag-panel">
+                <div className="diag-panel-header">
+                  <div>
+                    <span className="eyebrow">CRASH LOG ANALYZER &amp; AUTO-FIX</span>
+                    <h3>วิเคราะห์สาเหตุ FiveM เด้งอัตโนมัติ</h3>
+                  </div>
+                </div>
+                <CrashAdvisorContent
+                  report={crashReport}
+                  scanning={crashScanning}
+                  actionBusyId={crashFixBusyId}
+                  actionFeedback={crashFixFeedback}
+                  onRescan={onScanCrashLogs}
+                  onRunFix={onRunCrashFix}
+                  onNotify={onNotify}
+                />
+              </div>
+
+              <div className="activity-grid">
+                <div className="activity-card">
+                  <span className="eyebrow">PROCESS STATUS</span>
+                  <ul>
+                    <li>FiveM: <strong>{presence.fivem?.running ? 'กำลังทำงานอยู่' : presence.fivem?.running === false ? 'ปิดอยู่' : 'ไม่ทราบสถานะ'}</strong></li>
+                    <li>Steam: <strong>{presence.steam?.running ? presence.steam.user?.displayName || 'เปิดอยู่' : 'ไม่ได้เปิด'}</strong></li>
+                    <li>Discord: <strong>{presence.discord?.running ? presence.discord.user?.displayName || 'เปิดอยู่' : 'ไม่ได้เปิด'}</strong></li>
+                  </ul>
+                </div>
+                <div className="activity-card">
+                  <span className="eyebrow">RECENT LAUNCHES</span>
+                  {historyEntries.length === 0 ? (
+                    <p className="help-text">ยังไม่มีประวัติการกดเข้าเมือง</p>
+                  ) : (
+                    <ul>
+                      {historyEntries.slice(0, 4).map(entry => (
+                        <li key={entry.id}>
+                          <span>{entry.city?.name}</span>
+                          <strong>{entry.status === 'sent' ? 'ส่งคำสั่งแล้ว' : entry.status === 'failed' ? 'ไม่สำเร็จ' : entry.status}</strong>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+
+          {discoverSubTab === 'mods' && (
+            <ModPresetPanel
+              server={server}
+              settings={settings}
+              modState={modState}
+              busy={modBusy || busy}
+              fivemRunning={fivemRunning}
+              onRefresh={onRefreshModPresets}
+              onCreatePreset={onCreateModPreset}
+              onSwitchPreset={onSwitchModPreset}
+              onDeletePreset={onDeleteModPreset}
+              onOpenFolder={onOpenModPresetFolder}
+              onBindServerPreset={onBindServerModPreset}
+              onToggleAutoCleanPure={onToggleAutoCleanPure}
+              onRequestConfirm={onRequestConfirm}
+            />
+          )}
+
+          {discoverSubTab === 'watcher' && (
+            <NetworkWatcherPanel
+              server={server}
+              servers={servers}
+              routeReport={routeReport}
+              pingHistory={pingHistory}
+              probing={routeProbing}
+              watcherMap={watcherMap}
+              readyAlert={watcherReadyAlert}
+              launchBusy={busy}
+              onProbeRoute={onProbeRoute}
+              onToggleWatcher={onToggleWatcher}
+              onUpdateWatcher={onUpdateWatcher}
+              onRearmWatcher={onRearmWatcher}
+              onQuickJoinServer={onQuickJoinWatchedServer}
+              onDismissReadyAlert={onDismissWatcherAlert}
+            />
+          )}
         </section>
       )}
 
       {centerTab === 'general' && (
         <>
+          {watcherReadyAlert && (
+            <div className="watcher-ready-banner" role="status">
+              <div className="watcher-ready-copy">
+                <span className="diag-pill tone-emerald">
+                  <Radio size={11} /> {watcherReadyAlert.badge}
+                </span>
+                <strong>{watcherReadyAlert.serverName}</strong>
+                <span>{watcherReadyAlert.subtitle}</span>
+              </div>
+              <div className="watcher-ready-actions">
+                <button
+                  type="button"
+                  className="btn-action-play"
+                  disabled={busy}
+                  onClick={() => onQuickJoinWatchedServer?.(watcherReadyAlert.serverId)}
+                >
+                  <Play size={13} fill="currentColor" /> เข้าเมืองทันที
+                </button>
+                <button
+                  type="button"
+                  className="soft-button"
+                  onClick={() => onDismissWatcherAlert?.()}
+                >
+                  ปิด
+                </button>
+              </div>
+            </div>
+          )}
+
           <section
             className={`hero-section hero-showcase-card${server.name.length > 28 ? ' has-long-title' : ''}`}
             key={server.id}
@@ -362,6 +534,18 @@ export default function MainLauncher({
 
                 <button
                   type="button"
+                  className={`hero-fav-btn${isWatchingServer ? ' active is-watch-btn' : ''}`}
+                  aria-label={isWatchingServer ? `หยุดเฝ้า ${server.name}` : `เฝ้ารีสตาร์ทและสล็อตว่างของ ${server.name}`}
+                  aria-pressed={isWatchingServer}
+                  title="เฝ้าแจ้งเตือนเมื่อเมืองรีสตาร์ทเสร็จหรือมีสล็อตว่าง"
+                  onClick={() => onToggleWatcher?.(server)}
+                >
+                  {isWatchingServer ? <BellRing size={14} /> : <BellOff size={14} />}
+                  <span>{isWatchingServer ? 'กำลังเฝ้า' : 'เฝ้าเมือง'}</span>
+                </button>
+
+                <button
+                  type="button"
                   className={`hero-fav-btn${server.favorite ? ' active' : ''}`}
                   aria-label={server.favorite ? `เลิกปักหมุด ${server.name}` : `ปักหมุด ${server.name} เป็นเมืองโปรด`}
                   aria-pressed={!!server.favorite}
@@ -389,6 +573,15 @@ export default function MainLauncher({
                 </span>
                 {server.gameBuild && <span className="hero-spec-badge">Build {server.gameBuild}</span>}
                 {server.lockPure != null && <span className="hero-spec-badge">Pure {server.lockPure}</span>}
+                <button
+                  type="button"
+                  className="hero-spec-badge hero-spec-btn"
+                  title="เปิดทดสอบ Ping / Jitter และ Route Check"
+                  onClick={() => jumpToDiagnostics('watcher')}
+                >
+                  <Activity size={11} />
+                  {server.ping != null ? `${server.ping} ms` : 'ตรวจ Ping'}
+                </button>
               </div>
 
               <p className="hero-description">
@@ -605,6 +798,34 @@ export default function MainLauncher({
                   </button>
                 </div>
               </div>
+              <div className={`session-mod-strip${pureCompat.mismatch ? ' is-conflict' : ''}`}>
+                <span className="session-mod-label">
+                  {pureCompat.mismatch ? <ShieldAlert size={13} /> : <Layers size={13} />}
+                  <span>
+                    {activePresetObj ? activePresetObj.name : 'Mod Presets'}
+                    {pureCompat.mismatch ? ' · Pure Mode ชน!' : ''}
+                  </span>
+                </span>
+                <div className="session-mod-actions">
+                  {pureCompat.mismatch && !fivemRunning && (
+                    <button
+                      type="button"
+                      className="session-mini-btn danger"
+                      disabled={modBusy || busy}
+                      onClick={() => onSwitchModPreset?.(CLEAN_PURE_PRESET_ID)}
+                    >
+                      Clean ทันที
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="session-mini-btn"
+                    onClick={() => jumpToDiagnostics('mods')}
+                  >
+                    จัดการม็อด
+                  </button>
+                </div>
+              </div>
               <footer>
                 <span className="endpoint" title={server.ip}>
                   {server.ip}
@@ -640,6 +861,22 @@ export default function MainLauncher({
           <i /> ESTRA FIVEM LAUNCHER <span>/</span> v{APP_VERSION} · RUST/TAURI
         </span>
         <div className="workspace-footer-actions">
+          <button
+            className="quiet-button"
+            disabled={busy || crashScanning}
+            onClick={() => onOpenCrashAdvisor?.()}
+            aria-label="วิเคราะห์ Crash Log ล่าสุด"
+          >
+            <FileWarning size={14} /> วิเคราะห์ Crash
+          </button>
+          <button
+            className="quiet-button"
+            disabled={busy}
+            onClick={() => jumpToDiagnostics('watcher')}
+            aria-label="ทดสอบเส้นทางและเฝ้าเมือง"
+          >
+            <Wifi size={14} /> Ping &amp; Watcher
+          </button>
           <button className="quiet-button" disabled={busy} onClick={onOpenPatcher} aria-label="เปิด Patcher">
             <PackageCheck size={14} /> เปิด Patcher
           </button>
@@ -752,6 +989,36 @@ export default function MainLauncher({
             <p className="help-text">
               ตรวจ Game Build และ Pure Mode ล่าสุดจากเซิร์ฟเวอร์ก่อนเปิดเกมทุกครั้ง • CL2 สำหรับ GTA V Legacy
             </p>
+
+            <div>
+              <label className="field-label" htmlFor="city-mod-preset">
+                โปรไฟล์ม็อดประจำเมือง (สลับอัตโนมัติก่อนเข้าเมือง)
+              </label>
+              <div className="input-container">
+                <select
+                  id="city-mod-preset"
+                  value={server.modPresetId || ''}
+                  onChange={e => change('modPresetId', e.target.value)}
+                >
+                  <option value="">ใช้โปรไฟล์ม็อดปัจจุบัน (ไม่สลับอัตโนมัติ)</option>
+                  {(modState?.presets || []).map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} {p.pureSafe ? '(Pure 1/2 Safe)' : '(Pure 0)'}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="btn-inline-orange"
+                  onClick={() => jumpToDiagnostics('mods')}
+                >
+                  จัดการม็อด
+                </button>
+              </div>
+              <small className="help-text">
+                เมื่อกดเข้าเมืองนี้ Launcher จะสลับโฟลเดอร์ mods/ และ plugins/ ให้ตรงกับโปรไฟล์ที่ผูกไว้อัตโนมัติ (ต้องปิด FiveM ก่อน)
+              </small>
+            </div>
 
             <div>
               <label className="field-label" htmlFor="city-banner">

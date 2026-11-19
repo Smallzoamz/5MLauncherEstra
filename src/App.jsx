@@ -14,6 +14,7 @@ import PatcherModal from './components/PatcherModal';
 import ConfirmModal from './components/ConfirmModal';
 import GuideModal from './components/GuideModal';
 import UpdatePromptModal from './components/UpdatePromptModal';
+import CrashAdvisorModal from './components/CrashAdvisorModal';
 import { AlertToastStack } from './components/AlertToastStack';
 import { UserAvatar } from './components/UserAvatar';
 import useDialogFocus from './components/useDialogFocus';
@@ -23,7 +24,24 @@ import { fetchServerDirectory, loadCachedServerDirectory } from './services/serv
 import { applyDirectoryMetadataToServer, lookupDirectoryServer, normalizeDirectoryAddress, syncLiveServerName } from './shared/serverDirectory';
 import { DEFAULT_SERVER_TAG, normalizeServerTag } from './shared/serverTags';
 import { resolveCommunityLinks } from './shared/communityLinks';
-import { queryServerInfo } from './services/fivemService';
+import { queryServerInfo, cleanRealCache } from './services/fivemService';
+import { analyzeCrashLogs } from './services/crashAnalyzerService';
+import {
+  CLEAN_PURE_PRESET_ID,
+  createModPreset,
+  deleteModPreset,
+  getModPresetsState,
+  openModPresetFolder,
+  switchModPreset
+} from './services/modPresetService';
+import {
+  appendPingHistory,
+  createDefaultWatcherRule,
+  evaluateWatcherTransition,
+  loadWatcherMap,
+  probeServerRoute,
+  saveWatcherMap
+} from './services/serverWatcherService';
 import CityBackground from './components/CityBackground';
 import audioService from './services/audioService';
 import presenceService from './services/presenceService';
@@ -87,7 +105,7 @@ import {
   toggleRemoteFavoriteServer,
   updateSocialProfile
 } from './services/socialService';
-import { apiGet } from './services/apiService';
+import { apiGet, apiPost } from './services/apiService';
 import { subscribeSocialRealtime } from './services/socialRealtime';
 import { clearUserChatCache } from './services/chatCacheService';
 import { isSupabaseGatewayUrl, resolveSocialServerUrl } from './shared/supabaseConfig';
@@ -192,6 +210,21 @@ export default function App() {
   const [voiceMeter, setVoiceMeter] = useState({ level: 0, speaking: false, transcribing: false });
   const [voiceDownloadProgress, setVoiceDownloadProgress] = useState(null);
   const [voiceBusy, setVoiceBusy] = useState(false);
+  const [discoverSubTab, setDiscoverSubTab] = useState('crash');
+  const [crashReport, setCrashReport] = useState(null);
+  const [crashScanning, setCrashScanning] = useState(false);
+  const [crashFixBusyId, setCrashFixBusyId] = useState('');
+  const [crashFixFeedback, setCrashFixFeedback] = useState(null);
+  const [modState, setModState] = useState(null);
+  const [modBusy, setModBusy] = useState(false);
+  const [routeReportByServer, setRouteReportByServer] = useState({});
+  const [pingHistoryByServer, setPingHistoryByServer] = useState({});
+  const [routeProbing, setRouteProbing] = useState(false);
+  const [watcherMap, setWatcherMap] = useState(() => loadWatcherMap());
+  const [watcherReadyAlert, setWatcherReadyAlert] = useState(null);
+  const watcherMapRef = useRef(watcherMap);
+  watcherMapRef.current = watcherMap;
+  const watcherLastPollRef = useRef({});
   const crpFiredKeysRef = useRef(new Set());
   const crpAddonStateRef = useRef(crpAddonState);
   crpAddonStateRef.current = crpAddonState;
@@ -976,7 +1009,11 @@ export default function App() {
     let attempt;
     try {
       attempt = historyStore.begin(target);
-      const result = await prepareLaunch(target, preferences);
+      const result = await prepareLaunch(target, preferences, {
+        onModPresetSwitched: nextModState => {
+          if (nextModState) setModState(nextModState);
+        }
+      });
       lastLaunchedServerIdRef.current = target.id;
       const nowIso = new Date().toISOString();
       setServers(prev => prev.map(s => (
@@ -1005,9 +1042,314 @@ export default function App() {
   useEffect(() => {
     window.estraWindow?.setLatestCity({ name: latestCity?.name || '', enabled: !!latestCity && !launchBusy && !modal && !settingsBusy && screenStage === 'launcher' });
   }, [latestCity?.id, latestCity?.name, launchBusy, modal, settingsBusy, screenStage]);
+  const handleRefreshModPresets = useCallback(async () => {
+    setModBusy(true);
+    try {
+      const next = await getModPresetsState(settingsRef.current.fivemPath);
+      setModState(next);
+    } catch {
+      setModState(null);
+    } finally {
+      setModBusy(false);
+    }
+  }, []);
+
+  const handleCreateModPreset = useCallback(async ({ name, description, cloneFromLive }) => {
+    setModBusy(true);
+    try {
+      const next = await createModPreset({
+        fivemPath: settingsRef.current.fivemPath,
+        name,
+        description,
+        cloneFromLive
+      });
+      setModState(next);
+      setUiNotice({ message: `สร้างโปรไฟล์ม็อด "${name}" สำเร็จ`, tone: 'notice', _seq: ++alertSeqRef.current });
+      return true;
+    } catch (err) {
+      setUiNotice({ message: err?.message || 'สร้างโปรไฟล์ม็อดไม่สำเร็จ', tone: 'error', _seq: ++alertSeqRef.current });
+      return false;
+    } finally {
+      setModBusy(false);
+    }
+  }, []);
+
+  const handleSwitchModPreset = useCallback(async presetId => {
+    setModBusy(true);
+    try {
+      const next = await switchModPreset(settingsRef.current.fivemPath, presetId);
+      setModState(next);
+      const switched = next?.presets?.find(p => p.id === presetId);
+      setUiNotice({
+        message: `สลับโปรไฟล์ม็อดเป็น "${switched?.name || presetId}" เรียบร้อยแล้ว`,
+        tone: 'notice',
+        _seq: ++alertSeqRef.current
+      });
+      return true;
+    } catch (err) {
+      setUiNotice({ message: err?.message || 'สลับโปรไฟล์ม็อดไม่สำเร็จ', tone: 'error', _seq: ++alertSeqRef.current });
+      return false;
+    } finally {
+      setModBusy(false);
+    }
+  }, []);
+
+  const handleDeleteModPreset = useCallback(async presetId => {
+    setModBusy(true);
+    try {
+      const next = await deleteModPreset(settingsRef.current.fivemPath, presetId);
+      setModState(next);
+      setServers(prev => prev.map(s => (s.modPresetId === presetId ? { ...s, modPresetId: '' } : s)));
+      setUiNotice({ message: 'ลบโปรไฟล์ม็อดออกจากคลังแล้ว', tone: 'notice', _seq: ++alertSeqRef.current });
+    } catch (err) {
+      setUiNotice({ message: err?.message || 'ลบโปรไฟล์ม็อดไม่สำเร็จ', tone: 'error', _seq: ++alertSeqRef.current });
+    } finally {
+      setModBusy(false);
+    }
+  }, []);
+
+  const handleOpenModPresetFolder = useCallback(async presetId => {
+    try {
+      await openModPresetFolder(settingsRef.current.fivemPath, presetId);
+    } catch (err) {
+      setUiNotice({ message: err?.message || 'เปิดโฟลเดอร์ไม่สำเร็จ', tone: 'error', _seq: ++alertSeqRef.current });
+    }
+  }, []);
+
+  const handleScanCrashLogs = useCallback(async ({ sinceUnixMs = null, openModalIfCrash = false, openModalAlways = false } = {}) => {
+    setCrashScanning(true);
+    setCrashFixFeedback(null);
+    const currentCity = serversRef.current.find(s => s.id === (lastLaunchedServerIdRef.current || activeIdRef.current)) || null;
+    try {
+      const report = await analyzeCrashLogs({
+        fivemPath: settingsRef.current.fivemPath,
+        sinceUnixMs,
+        server: currentCity
+      });
+      setCrashReport(report);
+      if (openModalAlways || (openModalIfCrash && report?.isRecentSessionCrash)) {
+        setModal('crash');
+      }
+      return report;
+    } catch (err) {
+      const msg = err?.message || 'ไม่สามารถอ่านไฟล์ Log/Crash ของ FiveM ได้';
+      setCrashFixFeedback({ tone: 'error', message: msg });
+      if (openModalAlways) setModal('crash');
+      return null;
+    } finally {
+      setCrashScanning(false);
+    }
+  }, []);
+
+  const handleProbeRoute = useCallback(async targetServer => {
+    if (!targetServer?.ip) return;
+    setRouteProbing(true);
+    try {
+      const report = await probeServerRoute(targetServer.ip, 6);
+      setRouteReportByServer(prev => ({ ...prev, [targetServer.id]: report }));
+      if (report?.avgMs != null) {
+        setPingHistoryByServer(prev => ({
+          ...prev,
+          [targetServer.id]: appendPingHistory(prev[targetServer.id], {
+            ts: report.checkedAtMs,
+            ping: report.avgMs
+          })
+        }));
+      }
+    } catch (err) {
+      setUiNotice({ message: err?.message || 'ทดสอบเส้นทางไม่สำเร็จ', tone: 'error', _seq: ++alertSeqRef.current });
+    } finally {
+      setRouteProbing(false);
+    }
+  }, []);
+
+  const handleRunCrashFix = useCallback(async fixId => {
+    if (!fixId || crashFixBusyId) return;
+    if (fixId === 'open_mic_test') {
+      setModal('mic');
+      return;
+    }
+    if (fixId === 'open_network_diag') {
+      setModal(null);
+      setDiscoverSubTab('watcher');
+      setCenterTab('discover');
+      const targetSrv = serversRef.current.find(s => s.id === activeIdRef.current);
+      if (targetSrv) void handleProbeRoute(targetSrv);
+      return;
+    }
+
+    setCrashFixBusyId(fixId);
+    setCrashFixFeedback(null);
+    try {
+      if (fixId === 'clean_cache') {
+        const res = await cleanRealCache(settingsRef.current);
+        if (!res?.success) throw new Error(res?.error || 'ล้างแคชไม่สำเร็จ');
+        setCrashFixFeedback({ tone: 'notice', message: `ล้างแคชเมืองสำเร็จ (${(res.steps || []).join(' • ')})` });
+      } else if (fixId === 'clean_shaders') {
+        const res = await apiPost('/api/clean-maintenance', {
+          fivemPath: settingsRef.current.fivemPath,
+          categories: ['shaders']
+        });
+        if (!res?.success) throw new Error(res?.error || 'ล้าง Shader ไม่สำเร็จ');
+        setCrashFixFeedback({ tone: 'notice', message: `ล้าง Shader / GPU Cache สำเร็จ (${res.deletedFiles || 0} ไฟล์)` });
+      } else if (fixId === 'clean_logs_crashes') {
+        const res = await apiPost('/api/clean-maintenance', {
+          fivemPath: settingsRef.current.fivemPath,
+          categories: ['logs', 'crashes']
+        });
+        if (!res?.success) throw new Error(res?.error || 'ล้าง Log/Crash ไม่สำเร็จ');
+        setCrashFixFeedback({ tone: 'notice', message: `ล้างไฟล์ Log และ Crash เก่าแล้ว (${res.deletedFiles || 0} ไฟล์)` });
+      } else if (fixId === 'switch_preset_clean') {
+        const ok = await handleSwitchModPreset(CLEAN_PURE_PRESET_ID);
+        if (!ok) throw new Error('สลับเป็น Clean Pure Mode ไม่สำเร็จ');
+        setCrashFixFeedback({ tone: 'notice', message: 'สลับเป็น Clean Pure Mode เรียบร้อยแล้ว (ไฟล์ม็อดเดิมเก็บอยู่ในคลังปลอดภัย)' });
+      }
+    } catch (err) {
+      setCrashFixFeedback({ tone: 'error', message: err?.message || 'ดำเนินการแก้ไขไม่สำเร็จ' });
+    } finally {
+      setCrashFixBusyId('');
+    }
+  }, [crashFixBusyId, handleProbeRoute, handleSwitchModPreset]);
+
+  const handleToggleWatcher = useCallback(targetServer => {
+    if (!targetServer?.id) return;
+    setWatcherMap(prev => {
+      const existing = prev[targetServer.id];
+      const next = { ...prev };
+      if (existing?.enabled) {
+        delete next[targetServer.id];
+        setUiNotice({ message: `หยุดเฝ้าเมือง ${targetServer.name} แล้ว`, tone: 'notice', _seq: ++alertSeqRef.current });
+      } else {
+        next[targetServer.id] = createDefaultWatcherRule(targetServer);
+        watcherLastPollRef.current[targetServer.id] = 0;
+        setUiNotice({
+          message: `เริ่มเฝ้าเมือง ${targetServer.name} — จะแจ้งเตือนเมื่อรีสตาร์ทเสร็จหรือมีสล็อตว่าง`,
+          tone: 'notice',
+          _seq: ++alertSeqRef.current
+        });
+      }
+      saveWatcherMap(next);
+      return next;
+    });
+  }, []);
+
+  const handleUpdateWatcher = useCallback((serverId, patch) => {
+    setWatcherMap(prev => {
+      const current = prev[serverId];
+      if (!current) return prev;
+      const next = { ...prev, [serverId]: { ...current, ...patch } };
+      saveWatcherMap(next);
+      return next;
+    });
+  }, []);
+
+  const handleRearmWatcher = useCallback(serverId => {
+    setWatcherMap(prev => {
+      const current = prev[serverId];
+      if (!current) return prev;
+      const next = { ...prev, [serverId]: { ...current, armedRestart: true, armedSlots: true } };
+      saveWatcherMap(next);
+      return next;
+    });
+  }, []);
+
+  const handleQuickJoinWatchedServer = useCallback(serverId => {
+    const city = serversRef.current.find(s => s.id === serverId);
+    if (!city) return;
+    setWatcherReadyAlert(null);
+    setActiveId(city.id);
+    setCenterTab('general');
+    void launchCity(city);
+  }, []);
+
+  useEffect(() => {
+    if (screenStage !== 'launcher') return;
+    void handleRefreshModPresets();
+  }, [screenStage, settings.fivemPath, handleRefreshModPresets]);
+
+  useEffect(() => {
+    if (screenStage !== 'launcher') return;
+    let cancelled = false;
+    const tick = async () => {
+      const currentMap = watcherMapRef.current;
+      const enabledRules = Object.values(currentMap).filter(r => r?.enabled);
+      if (!enabledRules.length) return;
+      const now = Date.now();
+      for (const rule of enabledRules) {
+        if (cancelled) return;
+        const city = serversRef.current.find(s => s.id === rule.serverId);
+        if (!city) continue;
+        const lastPoll = watcherLastPollRef.current[city.id] || 0;
+        if (now - lastPoll < (rule.intervalSec || 30) * 1000) continue;
+        watcherLastPollRef.current[city.id] = now;
+        try {
+          const result = await queryServerInfo(city);
+          if (cancelled) return;
+          const nowIso = new Date().toISOString();
+          setServers(prev => prev.map(s => {
+            if (s.id !== city.id || s.ip !== city.ip) return s;
+            return {
+              ...s,
+              onlinePlayers: result.clients,
+              maxPlayers: result.maxClients,
+              status: result.status,
+              ping: result.ping,
+              gameBuild: result.gameBuild ?? s.gameBuild,
+              lockPure: result.lockPure ?? s.lockPure,
+              lastOnlineAt: result.status === 'Online' ? (result.checkedAt || nowIso) : (s.lastOnlineAt || null),
+              checkedAt: result.checkedAt,
+              queryError: result.error || null
+            };
+          }));
+          const latestRule = watcherMapRef.current[city.id];
+          if (!latestRule?.enabled) continue;
+          const { nextRule, events } = evaluateWatcherTransition(latestRule, city, result, nowIso);
+          setWatcherMap(prev => {
+            if (!prev[city.id]?.enabled) return prev;
+            const next = { ...prev, [city.id]: nextRule };
+            saveWatcherMap(next);
+            return next;
+          });
+          for (const ev of events) {
+            setWatcherReadyAlert(ev);
+            if (settingsRef.current.screenshotPlaySound !== false) {
+              playOverlayFriendChime();
+            }
+            void pushOverlayNotification(
+              {
+                id: `watcher-${ev.serverId}-${Date.now()}`,
+                kind: 'server-watcher',
+                badge: ev.badge,
+                title: ev.title,
+                subtitle: ev.subtitle,
+                detail: ev.detail,
+                imageUrl: '',
+                initials: ev.serverName.slice(0, 2).toUpperCase(),
+                accentColor: '#10b981',
+                durationMs: 7000
+              },
+              { settings: settingsRef.current }
+            ).catch(() => {});
+          }
+        } catch {}
+      }
+    };
+    const timer = window.setInterval(() => { void tick(); }, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [screenStage]);
+
   useEffect(() => window.estraWindow?.onGameStatus(payload => {
     setGameNotice(payload ? { ...payload, _seq: ++alertSeqRef.current } : null);
-  }), []);
+    if (payload?.state === 'closed' && settingsRef.current.autoAnalyzeCrashAfterExit !== false) {
+      void handleScanCrashLogs({
+        sinceUnixMs: payload.sessionStartedAtMs || null,
+        openModalIfCrash: true
+      });
+    }
+  }), [handleScanCrashLogs]);
 
   const handleDismissAlert = useCallback(id => {
     if (id.startsWith('launch-')) {
@@ -1091,6 +1433,12 @@ export default function App() {
           checkedAt: result.checkedAt, queryError: result.error || null
         };
       }));
+      if (result.online && result.ping != null) {
+        setPingHistoryByServer(prev => ({
+          ...prev,
+          [active.id]: appendPingHistory(prev[active.id], { ts: Date.now(), ping: result.ping })
+        }));
+      }
       setRefreshing(false);
       timer = setTimeout(query, 30000);
     };
@@ -1497,6 +1845,35 @@ export default function App() {
               onRequestConfirm={requestConfirm}
               playingServerId={presence.fivem?.running ? (activePlaySessionRef.current.serverId || lastLaunchedServerIdRef.current || active?.id || '') : ''}
               onNotify={(message, tone = 'notice') => setUiNotice({ message, tone, _seq: ++alertSeqRef.current })}
+              discoverSubTab={discoverSubTab}
+              onChangeDiscoverSubTab={setDiscoverSubTab}
+              crashReport={crashReport}
+              crashScanning={crashScanning}
+              crashFixBusyId={crashFixBusyId}
+              crashFixFeedback={crashFixFeedback}
+              onScanCrashLogs={() => void handleScanCrashLogs({})}
+              onOpenCrashAdvisor={() => void handleScanCrashLogs({ openModalAlways: true })}
+              onRunCrashFix={handleRunCrashFix}
+              modState={modState}
+              modBusy={modBusy}
+              onRefreshModPresets={handleRefreshModPresets}
+              onCreateModPreset={handleCreateModPreset}
+              onSwitchModPreset={handleSwitchModPreset}
+              onDeleteModPreset={handleDeleteModPreset}
+              onOpenModPresetFolder={handleOpenModPresetFolder}
+              onBindServerModPreset={(serverId, presetId) => update({ id: serverId, modPresetId: presetId })}
+              onToggleAutoCleanPure={checked => savePrefs({ ...settings, autoCleanModsForPureMode: checked })}
+              routeReport={active ? routeReportByServer[active.id] || null : null}
+              pingHistory={active ? pingHistoryByServer[active.id] || [] : []}
+              routeProbing={routeProbing}
+              watcherMap={watcherMap}
+              watcherReadyAlert={watcherReadyAlert}
+              onProbeRoute={handleProbeRoute}
+              onToggleWatcher={handleToggleWatcher}
+              onUpdateWatcher={handleUpdateWatcher}
+              onRearmWatcher={handleRearmWatcher}
+              onQuickJoinWatchedServer={handleQuickJoinWatchedServer}
+              onDismissWatcherAlert={() => setWatcherReadyAlert(null)}
             />
           </div>
 
@@ -1658,6 +2035,17 @@ export default function App() {
       />
       <MicTestModal isOpen={modal === 'mic'} onClose={() => setModal(null)} settings={settings} onSaveSettings={savePrefs} />
       <CacheModal isOpen={modal === 'cache'} onClose={() => setModal(null)} settings={settings} />
+      <CrashAdvisorModal
+        isOpen={modal === 'crash'}
+        onClose={() => setModal(null)}
+        report={crashReport}
+        scanning={crashScanning}
+        actionBusyId={crashFixBusyId}
+        actionFeedback={crashFixFeedback}
+        onRescan={() => void handleScanCrashLogs({})}
+        onRunFix={handleRunCrashFix}
+        onNotify={(message, tone = 'notice') => setUiNotice({ message, tone, _seq: ++alertSeqRef.current })}
+      />
       <SettingsModal isOpen={modal === 'settings'} onClose={() => setModal(null)} settings={settings} onSaveSettings={savePrefs} activeServer={active} onMaintenanceBusy={setSettingsBusy} gameEnv={gameEnv} onGameEnvUpdate={setGameEnv} onRequestConfirm={requestConfirm} />
       <PatcherModal isOpen={modal === 'patcher'} onClose={() => setModal(null)} activeServer={active} settings={settings} onUpdateServer={update} launcherUpdate={launcherUpdate} onLauncherUpdateChange={setLauncherUpdate} onBusyChange={setSettingsBusy} onOpenFullPatcher={screenStage === 'launcher' ? () => setScreenStage('splash') : null} onRequestConfirm={requestConfirm} />
       <NewServerModal isOpen={modal === 'new'} onClose={() => setModal(null)} directory={directory} onAddServer={server => { setServers(prev => [server, ...prev]); setActiveId(server.id); }} />

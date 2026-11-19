@@ -83,6 +83,7 @@ export function mergeCloudServersWithLocalCache(cloudServers, localCachedServers
       bannerUrl: cached?.bannerUrl || '',
       connectingBannerUrl: cached?.connectingBannerUrl || '',
       lastOnlineAt: cached?.lastOnlineAt || null,
+      modPresetId: cached?.modPresetId || '',
     });
   });
 }

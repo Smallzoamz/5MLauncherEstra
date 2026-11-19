@@ -3,7 +3,7 @@ use crate::presence::get_fivem_sessions;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
 #[derive(Debug, Clone, Serialize)]
@@ -11,6 +11,15 @@ use tauri::{AppHandle, Emitter, Manager};
 pub struct GameStatusPayload {
     pub state: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_started_at_ms: Option<u64>,
+}
+
+fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn status_message(state: &str) -> &'static str {
@@ -25,10 +34,11 @@ fn status_message(state: &str) -> &'static str {
     }
 }
 
-fn emit_status(app: &AppHandle, state: &str) {
+fn emit_status(app: &AppHandle, state: &str, session_started_at_ms: Option<u64>) {
     let payload = GameStatusPayload {
         state: state.to_string(),
         message: status_message(state).to_string(),
+        session_started_at_ms,
     };
     let _ = app.emit("estra://game-status", payload);
 }
@@ -51,6 +61,7 @@ struct ActiveWatch {
     id: u64,
     baseline: HashSet<u32>,
     started_at: Instant,
+    started_at_unix_ms: u64,
     seen: bool,
     absent_at: Option<Instant>,
     error_at: Option<Instant>,
@@ -104,11 +115,11 @@ impl GameSessionMonitor {
                     };
                     if need_new_watch {
                         if let Some(pids) = baseline {
-                            let watch_id = self.start_watch(pids);
-                            emit_status(&app, "starting");
+                            let (watch_id, started_ms) = self.start_watch(pids);
+                            emit_status(&app, "starting", Some(started_ms));
                             self.spawn_poll(app.clone(), watch_id);
                         } else {
-                            emit_status(&app, "detection-error");
+                            emit_status(&app, "detection-error", None);
                             restore_window(&app);
                             return Ok(result);
                         }
@@ -117,7 +128,7 @@ impl GameSessionMonitor {
                     Ok(result)
                 }
                 Err(e) => {
-                    emit_status(&app, "dispatch-error");
+                    emit_status(&app, "dispatch-error", None);
                     restore_window(&app);
                     Err(e)
                 }
@@ -127,23 +138,23 @@ impl GameSessionMonitor {
                 .await
                 .ok()
                 .and_then(|r| r.ok());
-            let watch_id = self.start_watch(baseline.clone().unwrap_or_default());
+            let (watch_id, started_ms) = self.start_watch(baseline.clone().unwrap_or_default());
             match execute_real_launch(req).await {
                 Ok(result) => {
                     if baseline.is_none() {
                         self.clear_if(watch_id);
-                        emit_status(&app, "detection-error");
+                        emit_status(&app, "detection-error", None);
                         restore_window(&app);
                         return Ok(result);
                     }
                     hide_window(&app);
-                    emit_status(&app, "starting");
+                    emit_status(&app, "starting", Some(started_ms));
                     self.spawn_poll(app, watch_id);
                     Ok(result)
                 }
                 Err(e) => {
                     self.clear_if(watch_id);
-                    emit_status(&app, "dispatch-error");
+                    emit_status(&app, "dispatch-error", None);
                     restore_window(&app);
                     Err(e)
                 }
@@ -151,19 +162,21 @@ impl GameSessionMonitor {
         }
     }
 
-    fn start_watch(&self, pids: Vec<u32>) -> u64 {
+    fn start_watch(&self, pids: Vec<u32>) -> (u64, u64) {
         let mut guard = self.inner.lock().unwrap();
         guard.next_id += 1;
         let id = guard.next_id;
+        let started_at_unix_ms = now_unix_ms();
         guard.active = Some(ActiveWatch {
             id,
             baseline: pids.into_iter().collect(),
             started_at: Instant::now(),
+            started_at_unix_ms,
             seen: false,
             absent_at: None,
             error_at: None,
         });
-        id
+        (id, started_at_unix_ms)
     }
 
     fn clear_if(&self, id: u64) {
@@ -182,6 +195,7 @@ impl GameSessionMonitor {
                 let pids_res = tokio::task::spawn_blocking(get_fivem_sessions).await;
                 let mut finish_reason: Option<&'static str> = None;
                 let mut notify_running = false;
+                let session_started_ms: Option<u64>;
 
                 {
                     let Ok(mut guard) = monitor.inner.lock() else { break };
@@ -189,6 +203,7 @@ impl GameSessionMonitor {
                     if active.id != watch_id {
                         break;
                     }
+                    session_started_ms = Some(active.started_at_unix_ms);
                     match pids_res {
                         Ok(Ok(pids)) => {
                             active.error_at = None;
@@ -220,10 +235,10 @@ impl GameSessionMonitor {
                 }
 
                 if notify_running {
-                    emit_status(&app, "running");
+                    emit_status(&app, "running", session_started_ms);
                 }
                 if let Some(reason) = finish_reason {
-                    emit_status(&app, reason);
+                    emit_status(&app, reason, session_started_ms);
                     restore_window(&app);
                     break;
                 }

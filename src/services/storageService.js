@@ -26,6 +26,9 @@ export const DEFAULT_SETTINGS = {
   screenshotPlaySound: true, screenshotDir: '',
   overlayNotificationsEnabled: true, overlayNotifyScreenshot: true,
   overlayNotifyFriendOnline: true, overlayNotifyFriendInGame: true,
+  overlayNotifyServerWatcher: true,
+  autoAnalyzeCrashAfterExit: true,
+  autoCleanModsForPureMode: false,
   perfOverlayEnabled: false, perfOverlayOnlyInGame: false,
   perfOverlayIncludeInScreenshots: false, perfOverlayPosition: 'top-left',
   clockOverlayEnabled: false, clockOverlayOnlyInGame: false,
@@ -36,7 +39,7 @@ export const DEFAULT_SETTINGS = {
   facebookUrl: 'https://www.facebook.com/estralauncher'
 };
 export const DEFAULT_SERVERS = [];
-export function resetLive(s) { return { ...s, tag: normalizeServerTag(s.tag, DEFAULT_SERVER_TAG), favorite: !!s.favorite, directorySlug: typeof s.directorySlug === 'string' ? s.directorySlug : '', lastFetchedName: typeof s.lastFetchedName === 'string' ? s.lastFetchedName : '', playtimeSeconds: Number.isFinite(Number(s.playtimeSeconds)) && Number(s.playtimeSeconds) > 0 ? Math.floor(Number(s.playtimeSeconds)) : 0, lastPlayedAt: typeof s.lastPlayedAt === 'string' && s.lastPlayedAt ? s.lastPlayedAt : null, lastOnlineAt: typeof s.lastOnlineAt === 'string' && s.lastOnlineAt ? s.lastOnlineAt : null, customBannerUrl: bannerImageUrl(s.customBannerUrl), bannerUrl: bannerImageUrl(s.bannerUrl), connectingBannerUrl: bannerImageUrl(s.connectingBannerUrl), patchManifestUrl: normalizePatchManifestUrl(s.patchManifestUrl) || '', logoUrl: s.iconSource === 'server-icon-v1' && typeof s.logoUrl === 'string' && s.logoUrl.startsWith('data:image/png;base64,') ? s.logoUrl : null, iconSource: s.iconSource === 'server-icon-v1' ? s.iconSource : null, status: 'Unknown', onlinePlayers: null, maxPlayers: null, ping: null, gameBuild: null, lockPure: null, queryError: null }; }
+export function resetLive(s) { return { ...s, tag: normalizeServerTag(s.tag, DEFAULT_SERVER_TAG), favorite: !!s.favorite, directorySlug: typeof s.directorySlug === 'string' ? s.directorySlug : '', lastFetchedName: typeof s.lastFetchedName === 'string' ? s.lastFetchedName : '', modPresetId: typeof s.modPresetId === 'string' ? s.modPresetId : '', playtimeSeconds: Number.isFinite(Number(s.playtimeSeconds)) && Number(s.playtimeSeconds) > 0 ? Math.floor(Number(s.playtimeSeconds)) : 0, lastPlayedAt: typeof s.lastPlayedAt === 'string' && s.lastPlayedAt ? s.lastPlayedAt : null, lastOnlineAt: typeof s.lastOnlineAt === 'string' && s.lastOnlineAt ? s.lastOnlineAt : null, customBannerUrl: bannerImageUrl(s.customBannerUrl), bannerUrl: bannerImageUrl(s.bannerUrl), connectingBannerUrl: bannerImageUrl(s.connectingBannerUrl), patchManifestUrl: normalizePatchManifestUrl(s.patchManifestUrl) || '', logoUrl: s.iconSource === 'server-icon-v1' && typeof s.logoUrl === 'string' && s.logoUrl.startsWith('data:image/png;base64,') ? s.logoUrl : null, iconSource: s.iconSource === 'server-icon-v1' ? s.iconSource : null, status: 'Unknown', onlinePlayers: null, maxPlayers: null, ping: null, gameBuild: null, lockPure: null, queryError: null }; }
 function isUntouchedFactoryDefaultServer(list) {
   if (!Array.isArray(list) || list.length !== 1) return false;
   const item = list[0];
@@ -76,7 +79,7 @@ export function getSavedServers(userId = '') {
 }
 export function saveServers(servers, userId = '') {
   const key = serversStorageKey(userId);
-  localStorage.setItem(key, JSON.stringify(servers.map(({ id, name, ip, tag, inGameName, logoUrl, iconSource, bannerUrl, connectingBannerUrl, customBannerUrl, cl2, favorite, patchManifestUrl, directorySlug, lastFetchedName, playtimeSeconds, lastPlayedAt, lastOnlineAt }) => ({ id, name, ip, tag, inGameName, logoUrl, iconSource, bannerUrl, connectingBannerUrl, customBannerUrl, cl2, favorite: !!favorite, patchManifestUrl: patchManifestUrl || '', directorySlug: directorySlug || '', lastFetchedName: typeof lastFetchedName === 'string' ? lastFetchedName : '', playtimeSeconds: Math.max(0, Math.floor(Number(playtimeSeconds) || 0)), lastPlayedAt: lastPlayedAt || null, lastOnlineAt: lastOnlineAt || null }))));
+  localStorage.setItem(key, JSON.stringify(servers.map(({ id, name, ip, tag, inGameName, logoUrl, iconSource, bannerUrl, connectingBannerUrl, customBannerUrl, cl2, favorite, patchManifestUrl, directorySlug, lastFetchedName, modPresetId, playtimeSeconds, lastPlayedAt, lastOnlineAt }) => ({ id, name, ip, tag, inGameName, logoUrl, iconSource, bannerUrl, connectingBannerUrl, customBannerUrl, cl2, favorite: !!favorite, patchManifestUrl: patchManifestUrl || '', directorySlug: directorySlug || '', lastFetchedName: typeof lastFetchedName === 'string' ? lastFetchedName : '', modPresetId: typeof modPresetId === 'string' ? modPresetId : '', playtimeSeconds: Math.max(0, Math.floor(Number(playtimeSeconds) || 0)), lastPlayedAt: lastPlayedAt || null, lastOnlineAt: lastOnlineAt || null }))));
 }
 export function getActiveServerId(userId = '') {
   try { return localStorage.getItem(activeServerStorageKey(userId)) || ''; } catch { return ''; }

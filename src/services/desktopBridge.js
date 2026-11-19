@@ -193,6 +193,20 @@ export function initDesktopBridge() {
         else unlisten();
       });
       return () => { active = false; unlistenFn?.(); };
-    }
+    },
+    analyzeCrashLogs: ({ fivemPath = '', sinceUnixMs = null, serverCtx = null } = {}) =>
+      invoke('analyze_crash_logs_cmd', { fivemPath, sinceUnixMs, serverCtx }),
+    getModPresets: (fivemPath = '') =>
+      invoke('get_mod_presets_cmd', { fivemPath }),
+    createModPreset: ({ fivemPath = '', name, description = '', cloneFromLive = false }) =>
+      invoke('create_mod_preset_cmd', { fivemPath, name, description, cloneFromLive }),
+    switchModPreset: ({ fivemPath = '', presetId }) =>
+      invoke('switch_mod_preset_cmd', { fivemPath, presetId }),
+    deleteModPreset: ({ fivemPath = '', presetId }) =>
+      invoke('delete_mod_preset_cmd', { fivemPath, presetId }),
+    openModPresetFolder: ({ fivemPath = '', presetId }) =>
+      invoke('open_mod_preset_folder_cmd', { fivemPath, presetId }),
+    probeServerRoute: ({ target, samples = 6 }) =>
+      invoke('probe_server_route_cmd', { target, samples })
   });
 }
