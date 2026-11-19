@@ -57,14 +57,26 @@ export const STT_ENGINES = [
 
 export const LOCAL_WHISPER_MODELS = [
   {
+    id: 'large-v3-turbo-q5_0',
+    label: 'Whisper Large-v3-Turbo (Q5_0 · ~574 MB — แนะนำสูงสุดสำหรับภาษาไทยในเกม)',
+    filename: 'ggml-large-v3-turbo-q5_0.bin',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin'
+  },
+  {
+    id: 'medium-q5_0',
+    label: 'Whisper Medium (Q5_0 · ~539 MB — แม่นยำสูง)',
+    filename: 'ggml-medium-q5_0.bin',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin'
+  },
+  {
     id: 'small-q5_1',
-    label: 'Whisper Small (Quantized Q5_1 · ~190 MB — แนะนำสำหรับภาษาไทย)',
+    label: 'Whisper Small (Q5_1 · ~190 MB — ประหยัดพื้นที่ แต่อาจเพี้ยนง่ายกับเสียงไทยในเกม)',
     filename: 'ggml-small-q5_1.bin',
     url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin'
   },
   {
     id: 'base',
-    label: 'Whisper Base (~148 MB — เบาและประมวลผลเร็ว)',
+    label: 'Whisper Base (~148 MB — เบาสุด เหมาะภาษาอังกฤษ/เสียงไมค์ชัด)',
     filename: 'ggml-base.bin',
     url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin'
   }
@@ -97,9 +109,9 @@ export const DEFAULT_VOICE_NOTE_CONFIG = {
   apiKey: '',
   customEndpoint: 'http://127.0.0.1:8080/v1/audio/transcriptions',
   cloudModel: 'whisper-large-v3-turbo',
-  localModelId: 'small-q5_1',
+  localModelId: 'large-v3-turbo-q5_0',
   language: 'th',
-  vadSensitivity: 0.014,
+  vadSensitivity: 0.020,
   maxChunkSeconds: 8,
   autoApplyCorrections: true,
   toggleOverlayHotkey: 'Alt+V',
@@ -147,10 +159,10 @@ export function sanitizeVoiceNoteConfig(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
   const audioSource = AUDIO_SOURCE_MODES.some(m => m.value === src.audioSource) ? src.audioSource : 'game';
   const sttEngine = STT_ENGINES.some(e => e.value === src.sttEngine) ? src.sttEngine : 'cloud-groq';
-  const localModelId = LOCAL_WHISPER_MODELS.some(m => m.id === src.localModelId) ? src.localModelId : 'small-q5_1';
+  const localModelId = LOCAL_WHISPER_MODELS.some(m => m.id === src.localModelId) ? src.localModelId : 'large-v3-turbo-q5_0';
   const language = VOICE_LANGUAGES.some(l => l.value === src.language) ? src.language : 'th';
   const vadRaw = Number(src.vadSensitivity);
-  const vadSensitivity = Number.isFinite(vadRaw) ? Math.max(0.003, Math.min(0.15, vadRaw)) : 0.014;
+  const vadSensitivity = Number.isFinite(vadRaw) ? Math.max(0.003, Math.min(0.15, vadRaw)) : 0.020;
   const chunkRaw = Number(src.maxChunkSeconds);
   const maxChunkSeconds = Number.isFinite(chunkRaw) ? Math.max(4, Math.min(20, Math.round(chunkRaw))) : 8;
 

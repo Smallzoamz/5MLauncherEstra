@@ -205,6 +205,7 @@ pub struct PerfOverlayManager {
     clock_settings: Arc<Mutex<ClockOverlaySettings>>,
     latest: Arc<Mutex<PerfMetricsSnapshot>>,
     latest_clock: Arc<Mutex<ClockOverlayState>>,
+    fivem_pids: Arc<Mutex<Vec<u32>>>,
     wake: Arc<(Mutex<()>, Condvar)>,
     worker_running: Arc<AtomicBool>,
     currently_visible: Arc<AtomicBool>,
@@ -329,6 +330,19 @@ impl PerfOverlayManager {
         }
     }
 
+    fn set_fivem_pids(&self, pids: Vec<u32>) {
+        if let Ok(mut guard) = self.fivem_pids.lock() {
+            *guard = pids;
+        }
+    }
+
+    pub fn snapshot_fivem_pids(&self) -> Vec<u32> {
+        self.fivem_pids
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default()
+    }
+
     pub fn current_layout(&self) -> HudLayoutDecision {
         let perf = self.snapshot_settings();
         let clock = self.snapshot_clock_settings();
@@ -424,11 +438,11 @@ mod win_perf {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tauri::WebviewWindow;
-    use windows::core::{Interface, PCWSTR};
-    use windows::Win32::Foundation::{FILETIME, HWND};
+    use windows::core::{BOOL, Interface, PCWSTR};
+    use windows::Win32::Foundation::{FILETIME, HWND, LPARAM, POINT, RECT};
     use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
     use windows::Win32::Graphics::Direct3D11::{
         D3D11CreateDevice, ID3D11Device, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
@@ -439,7 +453,8 @@ mod win_perf {
         DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
     };
     use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromWindow, HMONITOR, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
+        GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, HMONITOR, MONITORINFO,
+        MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
     };
     use windows::Win32::System::Performance::{
         PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhGetFormattedCounterArrayW,
@@ -447,13 +462,14 @@ mod win_perf {
     };
     use windows::Win32::System::Threading::GetSystemTimes;
     use windows::Win32::UI::HiDpi::{
-        SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        GetDpiForMonitor, SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        MDT_EFFECTIVE_DPI,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos,
-        ShowWindow, GWL_EXSTYLE, HWND_TOPMOST, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE,
-        SWP_NOSENDCHANGING, SWP_SHOWWINDOW, SW_HIDE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-        WS_EX_TRANSPARENT,
+        EnumWindows, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
+        IsIconic, IsWindowVisible, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE,
+        HWND_TOPMOST, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SWP_NOSENDCHANGING,
+        SWP_SHOWWINDOW, SW_HIDE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
     };
 
     const PDH_MORE_DATA_ERR: u32 = 0x8000_07D2;
@@ -468,28 +484,125 @@ mod win_perf {
         }
     }
 
-    pub fn active_work_area() -> (i32, i32, i32, i32) {
-        let fg = unsafe { GetForegroundWindow() };
-        let hmon = unsafe { MonitorFromWindow(fg, MONITOR_DEFAULTTOPRIMARY) };
+    struct FiveMEnumCtx<'a> {
+        pids: &'a [u32],
+        best_hwnd: HWND,
+        best_rect: RECT,
+        best_area: i64,
+    }
+
+    unsafe extern "system" fn enum_fivem_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let ctx = &mut *(lparam.0 as *mut FiveMEnumCtx<'_>);
+        if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+            return BOOL(1);
+        }
+        let mut pid: u32 = 0;
+        let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == 0 || !ctx.pids.contains(&pid) {
+            return BOOL(1);
+        }
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            return BOOL(1);
+        }
+        let w = (rect.right - rect.left) as i64;
+        let h = (rect.bottom - rect.top) as i64;
+        if w >= 320 && h >= 200 {
+            let area = w * h;
+            if area > ctx.best_area {
+                ctx.best_area = area;
+                ctx.best_hwnd = hwnd;
+                ctx.best_rect = rect;
+            }
+        }
+        BOOL(1)
+    }
+
+    fn find_fivem_window_monitor_and_rect(pids: &[u32]) -> Option<(HMONITOR, RECT)> {
+        if pids.is_empty() {
+            return None;
+        }
+        let mut ctx = FiveMEnumCtx {
+            pids,
+            best_hwnd: HWND(std::ptr::null_mut()),
+            best_rect: RECT::default(),
+            best_area: 0,
+        };
+        unsafe {
+            let _ = EnumWindows(
+                Some(enum_fivem_windows_proc),
+                LPARAM((&mut ctx as *mut FiveMEnumCtx<'_>) as isize),
+            );
+        }
+        if ctx.best_hwnd.0.is_null() {
+            return None;
+        }
+        let hmon = unsafe { MonitorFromWindow(ctx.best_hwnd, MONITOR_DEFAULTTONEAREST) };
+        if hmon.0.is_null() {
+            return None;
+        }
+        Some((hmon, ctx.best_rect))
+    }
+
+    pub fn resolve_target_hmonitor(pids: &[u32]) -> HMONITOR {
+        if let Some((hmon, _)) = find_fivem_window_monitor_and_rect(pids) {
+            return hmon;
+        }
+        unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) }
+    }
+
+    fn monitor_scale_factor(hmon: HMONITOR) -> Option<f64> {
+        if hmon.0.is_null() {
+            return None;
+        }
+        let mut dpi_x: u32 = 96;
+        let mut dpi_y: u32 = 96;
+        if unsafe { GetDpiForMonitor(hmon, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) }.is_ok()
+            && dpi_x >= 72
+        {
+            return Some((dpi_x as f64) / 96.0);
+        }
+        None
+    }
+
+    /// Always anchors strictly to FiveM's monitor when FiveM is open (ignoring Discord/browser
+    /// foreground changes on secondary monitors), and falls back to the Primary Monitor otherwise.
+    pub fn target_work_area(pids: &[u32]) -> ((i32, i32, i32, i32), HMONITOR) {
+        let fivem_match = find_fivem_window_monitor_and_rect(pids);
+        let hmon = fivem_match
+            .map(|(m, _)| m)
+            .unwrap_or_else(|| unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) });
+
         if !hmon.0.is_null() {
             let mut info = MONITORINFO {
                 cbSize: std::mem::size_of::<MONITORINFO>() as u32,
                 ..Default::default()
             };
             if unsafe { GetMonitorInfoW(hmon, &mut info) }.as_bool() {
-                let area = if info.rcWork.right > info.rcWork.left
+                let use_full_monitor = if let Some((_, fivem_rect)) = fivem_match {
+                    let fw = fivem_rect.right - fivem_rect.left;
+                    let fh = fivem_rect.bottom - fivem_rect.top;
+                    let mw = info.rcMonitor.right - info.rcMonitor.left;
+                    let mh = info.rcMonitor.bottom - info.rcMonitor.top;
+                    fw >= mw - 12 && fh >= mh - 12
+                } else {
+                    false
+                };
+                let area = if use_full_monitor {
+                    info.rcMonitor
+                } else if info.rcWork.right > info.rcWork.left
                     && info.rcWork.bottom > info.rcWork.top
                 {
                     info.rcWork
                 } else {
                     info.rcMonitor
                 };
-                return (area.left, area.top, area.right, area.bottom);
+                return ((area.left, area.top, area.right, area.bottom), hmon);
             }
         }
         let w = unsafe { GetSystemMetrics(SM_CXSCREEN) }.max(800);
         let h = unsafe { GetSystemMetrics(SM_CYSCREEN) }.max(600);
-        (0, 0, w, h)
+        ((0, 0, w, h), HMONITOR(std::ptr::null_mut()))
     }
 
     pub fn show_hud_topmost_no_activate(
@@ -497,6 +610,7 @@ mod win_perf {
         width: f64,
         height: f64,
         position: &str,
+        fivem_pids: &[u32],
     ) {
         let _ = win.set_ignore_cursor_events(true);
         let Ok(hwnd) = win.hwnd() else {
@@ -504,12 +618,14 @@ mod win_perf {
             return;
         };
         let target_hwnd = HWND(hwnd.0);
-        let scale = win.scale_factor().unwrap_or(1.0);
+        let (work_area, target_hmon) = target_work_area(fivem_pids);
+        let scale = monitor_scale_factor(target_hmon)
+            .or_else(|| win.scale_factor().ok())
+            .unwrap_or(1.0);
         let phys_w = (width * scale).round() as i32;
         let phys_h = (height * scale).round() as i32;
         let margin = (PERF_MARGIN as f64 * scale).round() as i32;
 
-        let work_area = active_work_area();
         let (x, y) = compute_perf_window_origin(work_area, phys_w, phys_h, margin, position);
 
         unsafe {
@@ -785,7 +901,7 @@ mod win_perf {
     }
 
     impl FpsCollectorHandle {
-        pub fn start() -> Self {
+        pub fn start(fivem_pids: Arc<Mutex<Vec<u32>>>) -> Self {
             let frames = Arc::new(AtomicU32::new(0));
             let available = Arc::new(AtomicBool::new(false));
             let stop = Arc::new(AtomicBool::new(false));
@@ -803,10 +919,9 @@ mod win_perf {
                             SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
                     }
                     while !stop_c.load(Ordering::Relaxed) {
-                        let fg_mon = unsafe {
-                            MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTOPRIMARY)
-                        };
-                        let Some((dupl, attached_mon)) = create_duplication_for_monitor(fg_mon)
+                        let pids_snap = fivem_pids.lock().map(|g| g.clone()).unwrap_or_default();
+                        let target_mon = resolve_target_hmonitor(&pids_snap);
+                        let Some((dupl, attached_mon)) = create_duplication_for_monitor(target_mon)
                         else {
                             avail_c.store(false, Ordering::Relaxed);
                             std::thread::sleep(Duration::from_millis(750));
@@ -818,12 +933,9 @@ mod win_perf {
                         while !stop_c.load(Ordering::Relaxed) {
                             if last_mon_check.elapsed() >= Duration::from_millis(1200) {
                                 last_mon_check = std::time::Instant::now();
-                                let cur_mon = unsafe {
-                                    MonitorFromWindow(
-                                        GetForegroundWindow(),
-                                        MONITOR_DEFAULTTOPRIMARY,
-                                    )
-                                };
+                                let cur_pids =
+                                    fivem_pids.lock().map(|g| g.clone()).unwrap_or_default();
+                                let cur_mon = resolve_target_hmonitor(&cur_pids);
                                 if !cur_mon.0.is_null() && cur_mon != attached_mon {
                                     break;
                                 }
@@ -883,15 +995,21 @@ mod win_perf {
 
 #[cfg(not(target_os = "windows"))]
 mod win_perf {
+    use std::sync::{Arc, Mutex};
     use tauri::WebviewWindow;
 
     pub fn flush_compositor() {}
+
+    pub fn target_work_area(_pids: &[u32]) -> ((i32, i32, i32, i32), ()) {
+        ((0, 0, 1920, 1080), ())
+    }
 
     pub fn show_hud_topmost_no_activate(
         win: &WebviewWindow,
         _width: f64,
         _height: f64,
         _position: &str,
+        _fivem_pids: &[u32],
     ) {
         let _ = win.set_ignore_cursor_events(true);
         let _ = win.show();
@@ -915,7 +1033,7 @@ mod win_perf {
 
     pub struct FpsCollectorHandle;
     impl FpsCollectorHandle {
-        pub fn start() -> Self { Self }
+        pub fn start(_fivem_pids: Arc<Mutex<Vec<u32>>>) -> Self { Self }
         pub fn take_fps(&self, _elapsed_secs: f64) -> Option<u32> { None }
     }
 }
@@ -981,6 +1099,7 @@ pub fn sync_hud_windows_on_main_thread(app: &AppHandle, manager: &PerfOverlayMan
     let mgr_ui = manager.clone();
     let _ = app.run_on_main_thread(move || {
         let layout = mgr_ui.current_layout();
+        let pids = mgr_ui.snapshot_fivem_pids();
 
         if layout.show_perf {
             mgr_ui.currently_visible.store(true, Ordering::SeqCst);
@@ -990,6 +1109,7 @@ pub fn sync_hud_windows_on_main_thread(app: &AppHandle, manager: &PerfOverlayMan
                     layout.perf_width,
                     PERF_HEIGHT,
                     &layout.perf_position,
+                    &pids,
                 );
             }
         } else {
@@ -1007,6 +1127,7 @@ pub fn sync_hud_windows_on_main_thread(app: &AppHandle, manager: &PerfOverlayMan
                     CLOCK_WIDTH,
                     PERF_HEIGHT,
                     &layout.clock_position,
+                    &pids,
                 );
             }
         } else {
@@ -1028,8 +1149,9 @@ fn start_singleton_hud_worker(app: AppHandle, manager: PerfOverlayManager) {
             let mut fps_collector: Option<win_perf::FpsCollectorHandle> = None;
             let mut last_tick = Instant::now();
             let mut last_fivem_check = Instant::now() - Duration::from_secs(10);
+            let mut cached_fivem_pids: Vec<u32> = Vec::new();
             let mut cached_fivem_running = false;
-            let mut last_applied: Option<(bool, String, u32, bool, String)> = None;
+            let mut last_applied: Option<(bool, String, u32, bool, String, (i32, i32, i32, i32))> = None;
 
             loop {
                 let perf_cfg = manager.snapshot_settings();
@@ -1039,15 +1161,15 @@ fn start_singleton_hud_worker(app: AppHandle, manager: PerfOverlayManager) {
                     break;
                 }
 
-                let need_fivem_check =
-                    (perf_cfg.enabled && perf_cfg.only_in_game) || (clock_cfg.enabled && clock_cfg.only_in_game);
-                if need_fivem_check && last_fivem_check.elapsed() >= Duration::from_millis(2200) {
+                // Always track FiveM PIDs every ~2.2s so the HUD locks strictly onto FiveM's monitor
+                // as soon as FiveM opens (even when "only in game" is off or user focuses Discord on monitor 2).
+                if last_fivem_check.elapsed() >= Duration::from_millis(2200) {
                     last_fivem_check = Instant::now();
-                    cached_fivem_running = crate::presence::get_fivem_sessions()
-                        .map(|pids| !pids.is_empty())
-                        .unwrap_or(false);
-                } else if !need_fivem_check {
-                    cached_fivem_running = false;
+                    if let Ok(pids) = crate::presence::get_fivem_sessions() {
+                        cached_fivem_running = !pids.is_empty();
+                        cached_fivem_pids = pids;
+                        manager.set_fivem_pids(cached_fivem_pids.clone());
+                    }
                 }
 
                 if perf_cfg.enabled {
@@ -1058,7 +1180,9 @@ fn start_singleton_hud_worker(app: AppHandle, manager: PerfOverlayManager) {
                         gpu = Some(win_perf::GpuSampler::new());
                     }
                     if fps_collector.is_none() {
-                        fps_collector = Some(win_perf::FpsCollectorHandle::start());
+                        fps_collector = Some(win_perf::FpsCollectorHandle::start(Arc::clone(
+                            &manager.fivem_pids,
+                        )));
                     }
                 } else {
                     cpu = None;
@@ -1095,12 +1219,14 @@ fn start_singleton_hud_worker(app: AppHandle, manager: PerfOverlayManager) {
                 };
                 manager.set_clock_state(clock_state.clone());
 
+                let (target_area, _) = win_perf::target_work_area(&cached_fivem_pids);
                 let next_key = (
                     layout.show_perf,
                     layout.perf_position.clone(),
                     layout.perf_width.round() as u32,
                     layout.show_clock_window,
                     layout.clock_position.clone(),
+                    target_area,
                 );
                 if last_applied.as_ref() != Some(&next_key) {
                     last_applied = Some(next_key);
@@ -1114,11 +1240,10 @@ fn start_singleton_hud_worker(app: AppHandle, manager: PerfOverlayManager) {
                     let _ = app.emit_to(CLOCK_OVERLAY_LABEL, "estra://clock-overlay-state", clock_state);
                 }
 
-                let wait_duration = if perf_cfg.enabled || clock_cfg.only_in_game {
+                let wait_duration = if perf_cfg.enabled {
                     Duration::from_millis(1000)
                 } else {
-                    // Standalone static clock without FiveM check: sleep until woken by settings change
-                    Duration::from_secs(60 * 60)
+                    Duration::from_millis(2500)
                 };
                 let (lock, cvar) = &*manager.wake;
                 if let Ok(guard) = lock.lock() {
@@ -1219,7 +1344,9 @@ mod tests {
     fn live_windows_samplers_collect_without_error() {
         let mut cpu = win_perf::CpuSampler::new();
         let mut gpu = win_perf::GpuSampler::new();
-        let fps = win_perf::FpsCollectorHandle::start();
+        let fps = win_perf::FpsCollectorHandle::start(Arc::new(Mutex::new(Vec::new())));
+        let (area, _hmon) = win_perf::target_work_area(&[]);
+        assert!(area.2 > area.0 && area.3 > area.1);
         std::thread::sleep(Duration::from_millis(450));
         let cpu_val = cpu.sample();
         let gpu_val = gpu.sample();

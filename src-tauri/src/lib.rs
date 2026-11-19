@@ -744,6 +744,15 @@ fn hide_voice_note_overlay_cmd(
 }
 
 #[tauri::command]
+fn get_last_voice_clip_cmd(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    state.voice_note.get_last_clip_data_url()
+}
+
+#[tauri::command]
 async fn analyze_crash_logs_cmd(
     webview: tauri::Webview,
     fivem_path: String,
@@ -1024,6 +1033,7 @@ pub fn run() {
             download_local_whisper_cmd,
             toggle_voice_note_overlay_cmd,
             hide_voice_note_overlay_cmd,
+            get_last_voice_clip_cmd,
             analyze_crash_logs_cmd,
             get_mod_presets_cmd,
             create_mod_preset_cmd,

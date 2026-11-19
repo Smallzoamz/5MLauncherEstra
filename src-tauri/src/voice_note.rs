@@ -1,5 +1,7 @@
 use crate::file_safety::{assert_no_links, assert_tree_no_links, assert_within, normalize_win_path};
-use crate::presence::get_fivem_sessions;
+use crate::presence::get_fivem_audio_pid;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -146,13 +148,13 @@ fn default_cloud_model() -> String {
     "whisper-large-v3-turbo".to_string()
 }
 fn default_local_model() -> String {
-    "small-q5_1".to_string()
+    "large-v3-turbo-q5_0".to_string()
 }
 fn default_language() -> String {
     "th".to_string()
 }
 fn default_vad() -> f32 {
-    0.014
+    0.020
 }
 fn default_chunk_secs() -> u8 {
     8
@@ -234,15 +236,30 @@ pub fn normalize_voice_position(raw: &str) -> String {
 
 pub fn local_model_spec(model_id: &str) -> (&'static str, &'static str, &'static str) {
     match model_id.trim() {
+        "large-v3-turbo-q5_0" => (
+            "large-v3-turbo-q5_0",
+            "ggml-large-v3-turbo-q5_0.bin",
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+        ),
+        "medium-q5_0" => (
+            "medium-q5_0",
+            "ggml-medium-q5_0.bin",
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin",
+        ),
+        "small-q5_1" => (
+            "small-q5_1",
+            "ggml-small-q5_1.bin",
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
+        ),
         "base" => (
             "base",
             "ggml-base.bin",
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
         ),
         _ => (
-            "small-q5_1",
-            "ggml-small-q5_1.bin",
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
+            "large-v3-turbo-q5_0",
+            "ggml-large-v3-turbo-q5_0.bin",
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
         ),
     }
 }
@@ -431,6 +448,183 @@ pub fn uninstall_voice_addon_in_dir(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+struct BiquadFilter {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    z1: f32,
+    z2: f32,
+    primed: bool,
+    prime_unity_dc: bool,
+}
+
+impl BiquadFilter {
+    fn lowpass(sample_rate: f32, cutoff_hz: f32, q: f32) -> Self {
+        let fc = cutoff_hz.clamp(20.0, sample_rate * 0.45);
+        let w0 = 2.0 * std::f32::consts::PI * fc / sample_rate;
+        let cos_w0 = w0.cos();
+        let alpha = w0.sin() / (2.0 * q.max(0.1));
+        let a0 = 1.0 + alpha;
+        Self {
+            b0: ((1.0 - cos_w0) * 0.5) / a0,
+            b1: (1.0 - cos_w0) / a0,
+            b2: ((1.0 - cos_w0) * 0.5) / a0,
+            a1: (-2.0 * cos_w0) / a0,
+            a2: (1.0 - alpha) / a0,
+            z1: 0.0,
+            z2: 0.0,
+            primed: false,
+            prime_unity_dc: true,
+        }
+    }
+
+    fn highpass(sample_rate: f32, cutoff_hz: f32, q: f32) -> Self {
+        let fc = cutoff_hz.clamp(20.0, sample_rate * 0.45);
+        let w0 = 2.0 * std::f32::consts::PI * fc / sample_rate;
+        let cos_w0 = w0.cos();
+        let alpha = w0.sin() / (2.0 * q.max(0.1));
+        let a0 = 1.0 + alpha;
+        Self {
+            b0: ((1.0 + cos_w0) * 0.5) / a0,
+            b1: -(1.0 + cos_w0) / a0,
+            b2: ((1.0 + cos_w0) * 0.5) / a0,
+            a1: (-2.0 * cos_w0) / a0,
+            a2: (1.0 - alpha) / a0,
+            z1: 0.0,
+            z2: 0.0,
+            primed: true,
+            prime_unity_dc: false,
+        }
+    }
+
+    #[inline]
+    fn process(&mut self, x: f32) -> f32 {
+        if !self.primed && self.prime_unity_dc {
+            self.primed = true;
+            self.z2 = (self.b2 - self.a2) * x;
+            self.z1 = (1.0 - self.b0) * x;
+        }
+        let y = self.b0 * x + self.z1;
+        self.z1 = self.b1 * x - self.a1 * y + self.z2;
+        self.z2 = self.b2 * x - self.a2 * y;
+        if y.is_finite() { y } else { 0.0 }
+    }
+}
+
+/// Stateful anti-aliased mono downmixer + fractional resampler to 16 kHz.
+/// Preserves filter state and fractional sample phase across WASAPI packets (no boundary clicks).
+pub struct StreamingResampler16k {
+    sample_rate: u32,
+    channels: u16,
+    bits_per_sample: u16,
+    is_float: bool,
+    aa_lpf: Option<BiquadFilter>,
+    step: f64,
+    phase: f64,
+    prev_sample: f32,
+    has_prev: bool,
+}
+
+impl StreamingResampler16k {
+    pub fn new(channels: u16, sample_rate: u32, bits_per_sample: u16, is_float: bool) -> Self {
+        let sr = sample_rate.max(8_000);
+        let aa_lpf = if sr > 16_000 {
+            Some(BiquadFilter::lowpass(sr as f32, 6_800.0, 0.7071))
+        } else {
+            None
+        };
+        Self {
+            sample_rate: sr,
+            channels: channels.max(1),
+            bits_per_sample: bits_per_sample.max(8),
+            is_float,
+            aa_lpf,
+            step: (sr as f64) / 16_000.0,
+            phase: 0.0,
+            prev_sample: 0.0,
+            has_prev: false,
+        }
+    }
+
+    #[inline]
+    fn read_sample(&self, raw: &[u8], offset: usize) -> f32 {
+        let v = if self.is_float && self.bits_per_sample == 32 && offset + 4 <= raw.len() {
+            f32::from_le_bytes([raw[offset], raw[offset + 1], raw[offset + 2], raw[offset + 3]])
+        } else if !self.is_float && self.bits_per_sample == 16 && offset + 2 <= raw.len() {
+            i16::from_le_bytes([raw[offset], raw[offset + 1]]) as f32 / 32768.0
+        } else if !self.is_float && self.bits_per_sample == 32 && offset + 4 <= raw.len() {
+            i32::from_le_bytes([raw[offset], raw[offset + 1], raw[offset + 2], raw[offset + 3]])
+                as f32
+                / 2147483648.0
+        } else {
+            0.0
+        };
+        if v.is_finite() { v } else { 0.0 }
+    }
+
+    pub fn push_bytes(&mut self, raw_bytes: &[u8]) -> Vec<i16> {
+        let ch = self.channels as usize;
+        let bps = (self.bits_per_sample / 8).max(1) as usize;
+        let stride = ch * bps;
+        let frames = raw_bytes.len() / stride;
+        if frames == 0 {
+            return Vec::new();
+        }
+
+        let mut mono = Vec::with_capacity(frames);
+        for f in 0..frames {
+            let base = f * stride;
+            let raw_mono = if ch == 1 {
+                self.read_sample(raw_bytes, base)
+            } else if ch == 2 {
+                0.5 * (self.read_sample(raw_bytes, base) + self.read_sample(raw_bytes, base + bps))
+            } else {
+                // 5.1 / 7.1 / Spatial headset: prioritize Front-L, Front-R, and Center voice channel
+                // instead of dividing stereo voice by 6 or 8 (which crushes volume by -12 to -18 dB).
+                let fl = self.read_sample(raw_bytes, base);
+                let fr = self.read_sample(raw_bytes, base + bps);
+                let fc = self.read_sample(raw_bytes, base + 2 * bps);
+                0.45 * (fl + fr) + 0.70 * fc
+            };
+            let filtered = match self.aa_lpf.as_mut() {
+                Some(lpf) => lpf.process(raw_mono),
+                None => raw_mono,
+            };
+            mono.push(filtered.clamp(-1.0, 1.0));
+        }
+
+        if self.sample_rate == 16_000 {
+            return mono
+                .into_iter()
+                .map(|s| (s * 32767.0).round().clamp(-32768.0, 32767.0) as i16)
+                .collect();
+        }
+
+        let mut out = Vec::with_capacity(((frames as f64) / self.step).ceil() as usize + 2);
+        let mut cursor = self.phase;
+        while cursor < frames as f64 {
+            let idx = cursor.floor() as isize;
+            let frac = (cursor - (idx as f64)) as f32;
+            let s0 = if idx < 0 {
+                if self.has_prev { self.prev_sample } else { mono[0] }
+            } else {
+                mono[(idx as usize).min(frames - 1)]
+            };
+            let s1 = mono[((idx + 1).max(0) as usize).min(frames - 1)];
+            let interp = s0 + (s1 - s0) * frac;
+            out.push((interp * 32767.0).round().clamp(-32768.0, 32767.0) as i16);
+            cursor += self.step;
+        }
+        self.phase = cursor - (frames as f64);
+        self.prev_sample = mono[frames - 1];
+        self.has_prev = true;
+        out
+    }
+}
+
 pub fn mix_and_resample_to_16khz(
     raw_bytes: &[u8],
     channels: u16,
@@ -438,71 +632,102 @@ pub fn mix_and_resample_to_16khz(
     bits_per_sample: u16,
     is_float: bool,
 ) -> Vec<i16> {
-    let ch = channels.max(1) as usize;
     if sample_rate == 0 || raw_bytes.is_empty() {
         return Vec::new();
     }
+    let mut r = StreamingResampler16k::new(channels, sample_rate, bits_per_sample, is_float);
+    r.push_bytes(raw_bytes)
+}
 
-    let bytes_per_sample = (bits_per_sample / 8).max(1) as usize;
-    let frame_stride = ch * bytes_per_sample;
-    let frame_count = raw_bytes.len() / frame_stride;
-    if frame_count == 0 {
+/// Prepare a captured 16 kHz speech chunk for Whisper:
+/// 1) 160 Hz high-pass filter to remove GTA V car engine / wind / bass rumble
+/// 2) Automatic gain normalization (boosts quiet Mumble voices cleanly without clipping)
+/// 3) 150ms silence padding at both ends so Whisper doesn't clip first/last Thai syllables
+pub fn prepare_speech_chunk_for_whisper(samples: &[i16]) -> Vec<i16> {
+    if samples.is_empty() {
         return Vec::new();
     }
+    let mut hp = BiquadFilter::highpass(16_000.0, 160.0, 0.7071);
+    let mut filtered = Vec::with_capacity(samples.len());
+    let mut sum_sq: f64 = 0.0;
+    let mut peak: f32 = 0.0;
 
-    let mut mono: Vec<f32> = Vec::with_capacity(frame_count);
-    for f in 0..frame_count {
-        let mut sum = 0.0_f32;
-        for c in 0..ch {
-            let offset = f * frame_stride + c * bytes_per_sample;
-            let sample_f = if is_float && bits_per_sample == 32 && offset + 4 <= raw_bytes.len() {
-                f32::from_le_bytes([
-                    raw_bytes[offset],
-                    raw_bytes[offset + 1],
-                    raw_bytes[offset + 2],
-                    raw_bytes[offset + 3],
-                ])
-            } else if !is_float && bits_per_sample == 16 && offset + 2 <= raw_bytes.len() {
-                i16::from_le_bytes([raw_bytes[offset], raw_bytes[offset + 1]]) as f32 / 32768.0
-            } else if !is_float && bits_per_sample == 32 && offset + 4 <= raw_bytes.len() {
-                i32::from_le_bytes([
-                    raw_bytes[offset],
-                    raw_bytes[offset + 1],
-                    raw_bytes[offset + 2],
-                    raw_bytes[offset + 3],
-                ]) as f32
-                    / 2147483648.0
-            } else {
-                0.0
-            };
-            sum += if sample_f.is_finite() { sample_f } else { 0.0 };
+    for &s in samples {
+        let x = (s as f32) / 32768.0;
+        let y = hp.process(x);
+        let ay = y.abs();
+        if ay > peak {
+            peak = ay;
         }
-        mono.push((sum / ch as f32).clamp(-1.0, 1.0));
+        sum_sq += (y as f64) * (y as f64);
+        filtered.push(y);
     }
 
-    if sample_rate == 16_000 {
-        return mono
-            .into_iter()
-            .map(|s| (s * 32767.0).round().clamp(-32768.0, 32767.0) as i16)
-            .collect();
-    }
+    let rms = (sum_sq / (filtered.len() as f64)).sqrt() as f32;
+    let gain = if rms > 0.002 && peak > 0.004 {
+        let rms_gain = 0.11 / rms;
+        let peak_cap = 0.90 / peak;
+        rms_gain.min(peak_cap).clamp(1.0, 5.5)
+    } else {
+        1.0
+    };
 
-    let out_len = ((mono.len() as f64) * 16_000.0 / (sample_rate as f64)).floor() as usize;
-    if out_len == 0 {
-        return Vec::new();
+    const PAD_SAMPLES: usize = 2_400; // 150ms @ 16kHz
+    let mut out = Vec::with_capacity(filtered.len() + PAD_SAMPLES * 2);
+    out.resize(PAD_SAMPLES, 0);
+    for y in filtered {
+        let boosted = (y * gain).clamp(-0.96, 0.96);
+        out.push((boosted * 32767.0).round().clamp(-32768.0, 32767.0) as i16);
     }
-    let ratio = (sample_rate as f64) / 16_000.0;
-    let mut out = Vec::with_capacity(out_len);
-    for i in 0..out_len {
-        let pos = (i as f64) * ratio;
-        let idx = pos.floor() as usize;
-        let frac = (pos - idx as f64) as f32;
-        let s0 = mono[idx.min(mono.len() - 1)];
-        let s1 = mono[(idx + 1).min(mono.len() - 1)];
-        let interp = s0 + (s1 - s0) * frac;
-        out.push((interp * 32767.0).round().clamp(-32768.0, 32767.0) as i16);
-    }
+    out.resize(out.len() + PAD_SAMPLES, 0);
     out
+}
+
+/// Adaptive speech-band VAD (300–3400 Hz) that tracks ambient GTA V noise floor
+/// and rejects low-frequency car engine rumble / sub-bass bangs.
+struct AdaptiveSpeechVad {
+    hp_300: BiquadFilter,
+    lp_3400: BiquadFilter,
+    noise_floor: f32,
+}
+
+impl AdaptiveSpeechVad {
+    fn new() -> Self {
+        Self {
+            hp_300: BiquadFilter::highpass(16_000.0, 300.0, 0.7071),
+            lp_3400: BiquadFilter::lowpass(16_000.0, 3_400.0, 0.7071),
+            noise_floor: 0.006,
+        }
+    }
+
+    fn evaluate_frame(&mut self, frame: &[i16], base_threshold: f32, currently_speaking: bool) -> (f32, bool) {
+        if frame.is_empty() {
+            return (0.0, false);
+        }
+        let mut broad_sq: f64 = 0.0;
+        let mut band_sq: f64 = 0.0;
+        for &s in frame {
+            let x = (s as f32) / 32768.0;
+            broad_sq += (x as f64) * (x as f64);
+            let bp = self.lp_3400.process(self.hp_300.process(x));
+            band_sq += (bp as f64) * (bp as f64);
+        }
+        let n = frame.len() as f64;
+        let broad_rms = (broad_sq / n).sqrt() as f32;
+        let speech_rms = (band_sq / n).sqrt() as f32;
+        let band_ratio = speech_rms / (broad_rms + 1e-6);
+
+        let dynamic_thresh = base_threshold.max(self.noise_floor * if currently_speaking { 1.65 } else { 2.15 });
+        let is_speech_like = speech_rms >= dynamic_thresh && band_ratio >= 0.36;
+
+        // Slowly track background ambient noise floor when not speaking
+        if !is_speech_like {
+            let alpha = if speech_rms < self.noise_floor { 0.14 } else { 0.04 };
+            self.noise_floor = (self.noise_floor * (1.0 - alpha) + speech_rms * alpha).clamp(0.002, 0.08);
+        }
+
+        (speech_rms, is_speech_like)
+    }
 }
 
 pub fn compute_rms(samples: &[i16]) -> f32 {
@@ -557,28 +782,176 @@ pub fn apply_text_corrections(raw_text: &str, corrections: &[VoiceCorrectionPair
     out
 }
 
-pub fn build_whisper_prompt(dict: &[String]) -> String {
+pub fn build_whisper_prompt(dict: &[String], language: &str) -> String {
+    // Avoid poisoning Thai Whisper decoder with ASCII console commands like setvoiceintent/reloadmap.
     let mut items = Vec::new();
-    for w in dict.iter().take(45) {
+    for w in dict {
         let t = w.trim();
-        if !t.is_empty() {
-            items.push(t);
+        if t.is_empty() || t.starts_with('/') {
+            continue;
+        }
+        let has_thai = t.chars().any(|c| ('\u{0E00}'..='\u{0E7F}').contains(&c));
+        let is_pure_ascii_ident = t.is_ascii() && !t.contains(' ');
+        if language == "th" && is_pure_ascii_ident && !has_thai {
+            continue;
+        }
+        items.push(t);
+        if items.len() >= 16 {
+            break;
         }
     }
-    items.join(", ").chars().take(500).collect()
+    if items.is_empty() {
+        return String::new();
+    }
+    if language == "th" {
+        format!("บทสนทนาภาษาไทยในเกม FiveM: {}", items.join(" "))
+            .chars()
+            .take(220)
+            .collect()
+    } else {
+        items.join(", ").chars().take(220).collect()
+    }
 }
 
-fn is_whisper_silence_artifact(text: &str) -> bool {
+fn has_repetition_hallucination(text: &str) -> bool {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.len() >= 4 {
+        let mut run = 1usize;
+        for i in 1..words.len() {
+            if words[i].eq_ignore_ascii_case(words[i - 1]) {
+                run += 1;
+                if run >= 4 {
+                    return true;
+                }
+            } else {
+                run = 1;
+            }
+        }
+    }
+    // Thai often has no spaces: check if same short substring repeats >= 4 times consecutively.
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() >= 12 {
+        for pat_len in 2..=6 {
+            if chars.len() < pat_len * 4 {
+                continue;
+            }
+            let mut i = 0usize;
+            while i + pat_len * 4 <= chars.len() {
+                let pat = &chars[i..i + pat_len];
+                if pat.iter().all(|c| c.is_whitespace()) {
+                    i += 1;
+                    continue;
+                }
+                let mut reps = 1usize;
+                let mut j = i + pat_len;
+                while j + pat_len <= chars.len() && &chars[j..j + pat_len] == pat {
+                    reps += 1;
+                    j += pat_len;
+                }
+                if reps >= 4 {
+                    return true;
+                }
+                i += 1;
+            }
+        }
+    }
+    false
+}
+
+pub fn is_whisper_silence_artifact(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return true;
     }
+    if trimmed.chars().count() <= 1 {
+        return true;
+    }
+    // Pure bracketed/parenthesized non-speech tags e.g. [Music], [BLANK_AUDIO], (เสียงเครื่องยนต์)
+    if (trimmed.starts_with('[') && trimmed.ends_with(']'))
+        || (trimmed.starts_with('(') && trimmed.ends_with(')'))
+        || trimmed.contains('♪')
+        || trimmed.contains("BLANK_AUDIO")
+    {
+        return true;
+    }
+    // Punctuation or digits only
+    if trimmed
+        .chars()
+        .all(|c| c.is_ascii_punctuation() || c.is_whitespace() || c.is_ascii_digit())
+    {
+        return true;
+    }
+    if has_repetition_hallucination(trimmed) {
+        return true;
+    }
     let lower = trimmed.to_ascii_lowercase();
-    matches!(
+    if matches!(
         lower.as_str(),
-        "." | ".." | "..." | "you" | "thank you." | "thanks for watching." | "mbc 뉴스" | "sous-titres"
-    ) || matches!(trimmed, "ขอบคุณครับ" | "ขอบคุณค่ะ" | "ขอบคุณที่รับชม")
+        "." | ".."
+            | "..."
+            | "you"
+            | "thank you."
+            | "thank you"
+            | "thanks for watching."
+            | "thanks for watching"
+            | "subscribe"
+            | "mbc 뉴스"
+            | "sous-titres"
+            | "amara.org"
+    ) {
+        return true;
+    }
+    const THAI_HALLUCINATIONS: &[&str] = &[
+        "ขอบคุณที่รับชม",
+        "ขอบคุณสำหรับการรับชม",
+        "โปรดติดตามตอนต่อไป",
+        "อย่าลืมกดไลค์",
+        "กดไลค์ กดแชร์",
+        "กดติดตาม",
+        "ซับไทยโดย",
+        "บรรยายโดย",
+        "แปลโดย",
+        "สมัครรับข้อมูล",
+        "พบกันใหม่คลิปหน้า",
+    ];
+    if THAI_HALLUCINATIONS.iter().any(|h| trimmed.contains(h)) && trimmed.chars().count() <= 45 {
+        return true;
+    }
+    matches!(trimmed, "ขอบคุณครับ" | "ขอบคุณค่ะ" | "สวัสดีครับ" | "สวัสดีค่ะ")
         && trimmed.chars().count() <= 14
+}
+
+pub fn parse_cloud_verbose_json(body_txt: &str) -> Result<String, String> {
+    let json: serde_json::Value = serde_json::from_str(body_txt)
+        .map_err(|_| "รูปแบบผลลัพธ์จาก STT API ไม่ถูกต้อง".to_string())?;
+    if let Some(segments) = json.get("segments").and_then(|v| v.as_array()) {
+        if !segments.is_empty() {
+            let mut kept = Vec::new();
+            for seg in segments {
+                let no_speech = seg
+                    .get("no_speech_prob")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
+                let avg_logprob = seg
+                    .get("avg_logprob")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
+                let compression = seg
+                    .get("compression_ratio")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(1.0);
+                if no_speech > 0.60 || avg_logprob < -1.05 || compression > 2.4 {
+                    continue;
+                }
+                let txt = seg.get("text").and_then(|v| v.as_str()).unwrap_or("").trim();
+                if !txt.is_empty() && !is_whisper_silence_artifact(txt) {
+                    kept.push(txt);
+                }
+            }
+            return Ok(kept.join(" ").trim().to_string());
+        }
+    }
+    Ok(json["text"].as_str().unwrap_or("").trim().to_string())
 }
 
 fn check_local_files(dir: &Path, model_id: &str) -> (bool, bool, Vec<String>) {
@@ -586,7 +959,7 @@ fn check_local_files(dir: &Path, model_id: &str) -> (bool, bool, Vec<String>) {
     let engine_ready = bin_exe.is_file();
     let models_dir = dir.join("models");
     let mut downloaded = Vec::new();
-    for id in ["small-q5_1", "base"] {
+    for id in ["large-v3-turbo-q5_0", "medium-q5_0", "small-q5_1", "base"] {
         let (_, fname, _) = local_model_spec(id);
         if models_dir.join(fname).is_file() {
             downloaded.push(id.to_string());
@@ -608,6 +981,7 @@ pub struct VoiceNoteManager {
     prev_fg_hwnd: Arc<AtomicIsize>,
     active_capture_label: Arc<Mutex<String>>,
     hotkey_running: Arc<AtomicBool>,
+    last_clip_wav: Arc<Mutex<Option<Vec<u8>>>>,
 }
 
 impl VoiceNoteManager {
@@ -838,6 +1212,25 @@ impl VoiceNoteManager {
         );
         self.emit_state(app);
         self.snapshot_state(Some(app))
+    }
+
+    pub fn set_last_clip_wav(&self, wav: Vec<u8>) {
+        if wav.len() <= 2 * 1024 * 1024 {
+            if let Ok(mut guard) = self.last_clip_wav.lock() {
+                *guard = Some(wav);
+            }
+        }
+    }
+
+    pub fn get_last_clip_data_url(&self) -> Result<String, String> {
+        let guard = self
+            .last_clip_wav
+            .lock()
+            .map_err(|_| "ไม่สามารถอ่านคลิปเสียงล่าสุดได้".to_string())?;
+        let Some(bytes) = guard.as_ref() else {
+            return Err("ยังไม่มีคลิปเสียงที่จับได้ กรุณากดเริ่มจับเสียงและรอให้มีเสียงพูดในเกมก่อน".into());
+        };
+        Ok(format!("data:audio/wav;base64,{}", BASE64.encode(bytes)))
     }
 }
 
@@ -1088,7 +1481,7 @@ async fn transcribe_wav_chunk(
     cfg: &VoiceNoteConfig,
     wav_bytes: Vec<u8>,
 ) -> Result<String, String> {
-    let prompt = build_whisper_prompt(&cfg.custom_dictionary);
+    let prompt = build_whisper_prompt(&cfg.custom_dictionary, &cfg.language);
     match cfg.stt_engine.as_str() {
         "local-whisper" => {
             let dir = resolve_voice_addon_dir(app)?;
@@ -1120,27 +1513,57 @@ async fn transcribe_wav_chunk(
                 }
                 let _guard = TempCleanup(wav_path.clone());
 
-                let mut cmd = std::process::Command::new(&exe);
-                cmd.arg("-m")
-                    .arg(&model_path)
-                    .arg("-l")
-                    .arg(&lang)
-                    .arg("-f")
-                    .arg(&wav_path)
-                    .arg("-nt")
-                    .arg("--no-prints");
-                if !prompt.is_empty() {
-                    cmd.arg("--prompt").arg(&prompt);
+                let threads = std::thread::available_parallelism()
+                    .map(|n| (n.get() / 2).clamp(2, 6))
+                    .unwrap_or(4);
+
+                let run_cli = |strict_flags: bool| -> Result<std::process::Output, String> {
+                    let mut cmd = std::process::Command::new(&exe);
+                    cmd.arg("-m")
+                        .arg(&model_path)
+                        .arg("-l")
+                        .arg(&lang)
+                        .arg("-f")
+                        .arg(&wav_path)
+                        .arg("-t")
+                        .arg(threads.to_string())
+                        .arg("-nt")
+                        .arg("--no-prints");
+                    if strict_flags {
+                        cmd.arg("-tp")
+                            .arg("0.0")
+                            .arg("-nth")
+                            .arg("0.65")
+                            .arg("-et")
+                            .arg("2.4")
+                            .arg("-lpt")
+                            .arg("-1.0")
+                            .arg("-mc")
+                            .arg("0")
+                            .arg("-sns");
+                    }
+                    if !prompt.is_empty() {
+                        cmd.arg("--prompt").arg(&prompt);
+                    }
+                    #[cfg(target_os = "windows")]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                        cmd.creation_flags(CREATE_NO_WINDOW);
+                    }
+                    cmd.output()
+                        .map_err(|e| format!("รัน whisper-cli.exe ไม่สำเร็จ: {e}"))
+                };
+
+                let mut output = run_cli(true)?;
+                if !output.status.success() {
+                    let err_txt = String::from_utf8_lossy(&output.stderr);
+                    if err_txt.to_ascii_lowercase().contains("unknown")
+                        || err_txt.to_ascii_lowercase().contains("unrecognized")
+                    {
+                        output = run_cli(false)?;
+                    }
                 }
-                #[cfg(target_os = "windows")]
-                {
-                    use std::os::windows::process::CommandExt;
-                    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-                    cmd.creation_flags(CREATE_NO_WINDOW);
-                }
-                let output = cmd
-                    .output()
-                    .map_err(|e| format!("รัน whisper-cli.exe ไม่สำเร็จ: {e}"))?;
                 if !output.status.success() {
                     let err_txt = String::from_utf8_lossy(&output.stderr);
                     return Err(format!("Local Whisper ถอดความไม่สำเร็จ: {err_txt}"));
@@ -1165,7 +1588,8 @@ async fn transcribe_wav_chunk(
             let mut form = reqwest::multipart::Form::new()
                 .part("file", part)
                 .text("model", cfg.cloud_model.clone())
-                .text("response_format", "json");
+                .text("temperature", "0")
+                .text("response_format", "verbose_json");
             if cfg.language != "auto" {
                 form = form.text("language", cfg.language.clone());
             }
@@ -1190,16 +1614,14 @@ async fn transcribe_wav_chunk(
             if !status.is_success() {
                 return Err(format!("STT API error ({status}): {body_txt}"));
             }
-            let json: serde_json::Value = serde_json::from_str(&body_txt)
-                .map_err(|_| "รูปแบบผลลัพธ์จาก STT API ไม่ถูกต้อง".to_string())?;
-            Ok(json["text"].as_str().unwrap_or("").trim().to_string())
+            parse_cloud_verbose_json(&body_txt)
         }
     }
 }
 
 #[cfg(target_os = "windows")]
 mod win_audio {
-    use super::{mix_and_resample_to_16khz, normalize_voice_position, VOICE_OV_HEIGHT, VOICE_OV_MARGIN, VOICE_OV_WIDTH};
+    use super::{normalize_voice_position, StreamingResampler16k, VOICE_OV_HEIGHT, VOICE_OV_MARGIN, VOICE_OV_WIDTH};
     use std::mem::size_of;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Condvar, Mutex};
@@ -1473,6 +1895,42 @@ mod win_audio {
             .cast()
             .map_err(|e| format!("Cast IAudioClient failed: {e}"))?;
 
+        const AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM: u32 = 0x8000_0000;
+        const AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY: u32 = 0x0800_0000;
+
+        // First try native 16kHz mono 16-bit PCM via Windows high-quality SRC (cleanest for Whisper).
+        let pcm16_desc = AudioFormatDesc {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            is_float: false,
+        };
+        let mut wfx_pcm16 = WAVEFORMATEX {
+            wFormatTag: WAVE_FORMAT_PCM_TAG,
+            nChannels: 1,
+            nSamplesPerSec: 16_000,
+            nAvgBytesPerSec: 32_000,
+            nBlockAlign: 2,
+            wBitsPerSample: 16,
+            cbSize: 0,
+        };
+        let init_pcm16 = unsafe {
+            client.Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_LOOPBACK
+                    | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+                    | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+                1_000_000,
+                0,
+                &mut wfx_pcm16,
+                None,
+            )
+        };
+        if init_pcm16.is_ok() {
+            return Ok((client, pcm16_desc));
+        }
+
+        // Fallback: 48kHz stereo float32 (with AUTOCONVERTPCM if supported, else raw loopback).
         let fmt_desc = AudioFormatDesc {
             channels: 2,
             sample_rate: 48_000,
@@ -1488,17 +1946,31 @@ mod win_audio {
             wBitsPerSample: fmt_desc.bits_per_sample,
             cbSize: 0,
         };
-        unsafe {
-            client
-                .Initialize(
-                    AUDCLNT_SHAREMODE_SHARED,
-                    AUDCLNT_STREAMFLAGS_LOOPBACK,
-                    1_000_000,
-                    0,
-                    &mut wfx,
-                    None,
-                )
-                .map_err(|e| format!("Initialize Process Loopback failed: {e}"))?;
+        let init_f32_auto = unsafe {
+            client.Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_LOOPBACK
+                    | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+                    | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+                1_000_000,
+                0,
+                &mut wfx,
+                None,
+            )
+        };
+        if init_f32_auto.is_err() {
+            unsafe {
+                client
+                    .Initialize(
+                        AUDCLNT_SHAREMODE_SHARED,
+                        AUDCLNT_STREAMFLAGS_LOOPBACK,
+                        1_000_000,
+                        0,
+                        &mut wfx,
+                        None,
+                    )
+                    .map_err(|e| format!("Initialize Process Loopback failed: {e}"))?;
+            }
         }
         Ok((client, fmt_desc))
     }
@@ -1570,11 +2042,17 @@ mod win_audio {
         unsafe { client.Start() }.map_err(|e| format!("สั่งเริ่มจับเสียงไม่สำเร็จ: {e}"))?;
 
         let frame_bytes = ((fmt_desc.channels as usize) * (fmt_desc.bits_per_sample as usize / 8)).max(1);
+        let mut resampler = StreamingResampler16k::new(
+            fmt_desc.channels,
+            fmt_desc.sample_rate,
+            fmt_desc.bits_per_sample,
+            fmt_desc.is_float,
+        );
 
         while !stop_flag.load(Ordering::Relaxed) {
             let mut packet_len = unsafe { capture_client.GetNextPacketSize() }.unwrap_or(0);
             if packet_len == 0 {
-                std::thread::sleep(std::time::Duration::from_millis(20));
+                std::thread::sleep(std::time::Duration::from_millis(16));
                 continue;
             }
             while packet_len > 0 && !stop_flag.load(Ordering::Relaxed) {
@@ -1604,13 +2082,7 @@ mod win_audio {
                     } else {
                         let byte_len = (num_frames as usize) * frame_bytes;
                         let slice = unsafe { std::slice::from_raw_parts(data_ptr, byte_len) };
-                        let resampled = mix_and_resample_to_16khz(
-                            slice,
-                            fmt_desc.channels,
-                            fmt_desc.sample_rate,
-                            fmt_desc.bits_per_sample,
-                            fmt_desc.is_float,
-                        );
+                        let resampled = resampler.push_bytes(slice);
                         if !resampled.is_empty() {
                             on_samples(&resampled);
                         }
@@ -1777,9 +2249,7 @@ fn spawn_single_capture_channel(
         .spawn(move || {
             crate::security::hide_sensitive_thread();
             let fivem_pid = if channel_mode == "game" {
-                get_fivem_sessions()
-                    .ok()
-                    .and_then(|pids| pids.into_iter().next())
+                get_fivem_audio_pid()
             } else {
                 None
             };
@@ -1799,14 +2269,16 @@ fn spawn_single_capture_channel(
             }
             manager.emit_state(&app);
 
-            // 16kHz VAD buffering
+            // 16kHz Adaptive Speech-Band VAD buffering
             const FRAME_SAMPLES: usize = 1600; // 100ms @ 16kHz
-            const PRE_ROLL_FRAMES: usize = 3; // 300ms pre-roll
+            const PRE_ROLL_FRAMES: usize = 4; // 400ms pre-roll so Thai onset consonants aren't clipped
             let mut ring: Vec<i16> = Vec::with_capacity(FRAME_SAMPLES * 4);
             let mut speech_buf: Vec<i16> = Vec::new();
             let mut pre_roll: Vec<Vec<i16>> = Vec::new();
             let mut speaking = false;
             let mut silence_frames: usize = 0;
+            let mut voiced_frames: usize = 0;
+            let mut vad = AdaptiveSpeechVad::new();
             let mut last_meter = Instant::now() - Duration::from_secs(1);
 
             let app_ref = &app;
@@ -1827,8 +2299,8 @@ fn spawn_single_capture_channel(
                     while ring.len() >= FRAME_SAMPLES {
                         let frame: Vec<i16> = ring.drain(0..FRAME_SAMPLES).collect();
                         let cfg = mgr_ref.snapshot_config();
-                        let rms = compute_rms(&frame);
-                        let is_voice = rms >= cfg.vad_sensitivity;
+                        let (speech_rms, is_voice) =
+                            vad.evaluate_frame(&frame, cfg.vad_sensitivity, speaking);
                         let max_samples = (cfg.max_chunk_seconds as usize) * 16_000;
 
                         if last_meter.elapsed() >= Duration::from_millis(120) {
@@ -1836,7 +2308,7 @@ fn spawn_single_capture_channel(
                             let _ = app_ref.emit(
                                 "estra://voice-note-meter",
                                 VoiceMeterPayload {
-                                    level: (rms * 6.0).min(1.0),
+                                    level: (speech_rms * 7.5).min(1.0),
                                     speaking: speaking || is_voice,
                                     transcribing: false,
                                     active_capture_label: active_label_str.clone(),
@@ -1847,10 +2319,12 @@ fn spawn_single_capture_channel(
                         if is_voice {
                             if !speaking {
                                 speaking = true;
+                                voiced_frames = 0;
                                 for prev_f in pre_roll.drain(..) {
                                     speech_buf.extend_from_slice(&prev_f);
                                 }
                             }
+                            voiced_frames += 1;
                             silence_frames = 0;
                             speech_buf.extend_from_slice(&frame);
                         } else if speaking {
@@ -1860,8 +2334,11 @@ fn spawn_single_capture_channel(
                             if silence_frames >= 7 {
                                 speaking = false;
                                 silence_frames = 0;
+                                let voiced = voiced_frames;
+                                voiced_frames = 0;
                                 let chunk = std::mem::take(&mut speech_buf);
-                                if chunk.len() >= 5_600 {
+                                // Require >= 400ms of actual speech-band voice (rejects single bangs/clicks)
+                                if voiced >= 4 && chunk.len() >= 6_400 {
                                     dispatch_transcription_async(
                                         app_ref.clone(),
                                         mgr_ref.clone(),
@@ -1878,15 +2355,19 @@ fn spawn_single_capture_channel(
                         }
 
                         if speaking && speech_buf.len() >= max_samples {
+                            let voiced = voiced_frames;
                             let chunk = std::mem::take(&mut speech_buf);
                             speaking = false;
                             silence_frames = 0;
-                            dispatch_transcription_async(
-                                app_ref.clone(),
-                                mgr_ref.clone(),
-                                chunk,
-                                src_ref.clone(),
-                            );
+                            voiced_frames = 0;
+                            if voiced >= 4 {
+                                dispatch_transcription_async(
+                                    app_ref.clone(),
+                                    mgr_ref.clone(),
+                                    chunk,
+                                    src_ref.clone(),
+                                );
+                            }
                         }
                     }
                 },
@@ -1906,7 +2387,9 @@ fn dispatch_transcription_async(
     source_tag: String,
 ) {
     let cfg = manager.snapshot_config();
-    let wav = encode_pcm16_wav_16k(&pcm_samples);
+    let prepared = prepare_speech_chunk_for_whisper(&pcm_samples);
+    let wav = encode_pcm16_wav_16k(&prepared);
+    manager.set_last_clip_wav(wav.clone());
     tauri::async_runtime::spawn(async move {
         let _ = app.emit(
             "estra://voice-note-meter",
@@ -2047,5 +2530,55 @@ mod tests {
         ];
         let fixed = apply_text_corrections("วันนี้ สะพานักเลียน ประชุมเรื่อง โลเพ", &pairs);
         assert_eq!(fixed, "วันนี้ สภานักเรียน ประชุมเรื่อง โรลเพลย์");
+    }
+
+    #[test]
+    fn filters_whisper_hallucinations_repetitions_and_low_confidence_segments() {
+        assert!(is_whisper_silence_artifact("ขอบคุณสำหรับการรับชม"));
+        assert!(is_whisper_silence_artifact("[Music]"));
+        assert!(is_whisper_silence_artifact("(เสียงเครื่องยนต์)"));
+        assert!(is_whisper_silence_artifact("ครับ ครับ ครับ ครับ"));
+        assert!(is_whisper_silence_artifact("อ่าอ่าอ่าอ่าอ่าอ่า"));
+        assert!(!is_whisper_silence_artifact("เจอกันที่หน้าโรงเรียนตอนสองทุ่ม"));
+
+        let prompt_th = build_whisper_prompt(
+            &[
+                "โรลเพลย์".into(),
+                "สภานักเรียน".into(),
+                "setvoiceintent".into(),
+                "reloadmap".into(),
+            ],
+            "th",
+        );
+        assert!(prompt_th.contains("โรลเพลย์"));
+        assert!(!prompt_th.contains("setvoiceintent"));
+        assert!(!prompt_th.contains("reloadmap"));
+
+        let verbose = r#"{
+            "text": "ขอบคุณที่รับชม เจอกันหน้าสภา",
+            "segments": [
+                { "text": "ขอบคุณที่รับชม", "no_speech_prob": 0.85, "avg_logprob": -1.5, "compression_ratio": 1.1 },
+                { "text": "เจอกันหน้าสภา", "no_speech_prob": 0.12, "avg_logprob": -0.35, "compression_ratio": 1.2 },
+                { "text": "มั่ว มั่ว มั่ว มั่ว", "no_speech_prob": 0.2, "avg_logprob": -0.4, "compression_ratio": 3.1 }
+            ]
+        }"#;
+        let parsed = parse_cloud_verbose_json(verbose).unwrap();
+        assert_eq!(parsed, "เจอกันหน้าสภา");
+    }
+
+    #[test]
+    fn highpass_and_normalizer_strip_low_rumble_and_boost_quiet_speech() {
+        // Generate quiet 800Hz speech tone (amplitude 0.03)
+        let mut speech = Vec::with_capacity(8000);
+        for i in 0..8000 {
+            let t = i as f32 / 16_000.0;
+            let s = (2.0 * std::f32::consts::PI * 800.0 * t).sin() * 0.03;
+            speech.push((s * 32767.0) as i16);
+        }
+        let prepared = prepare_speech_chunk_for_whisper(&speech);
+        // Includes 150ms lead + 150ms trail padding
+        assert_eq!(prepared.len(), 8000 + 4800);
+        let core_rms = compute_rms(&prepared[2400..10400]);
+        assert!(core_rms > 0.08, "expected quiet speech to be normalized, got {core_rms}");
     }
 }

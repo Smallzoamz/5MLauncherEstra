@@ -144,6 +144,7 @@ export function initDesktopBridge() {
     downloadLocalWhisper: modelId => invoke('download_local_whisper_cmd', { modelId }),
     toggleVoiceNoteOverlay: (visible = null) => invoke('toggle_voice_note_overlay_cmd', { visible }),
     hideVoiceNoteOverlay: () => invoke('hide_voice_note_overlay_cmd'),
+    getLastVoiceClip: () => invoke('get_last_voice_clip_cmd'),
     onVoiceNoteState: callback => {
       if (typeof callback !== 'function') return () => {};
       let active = true;

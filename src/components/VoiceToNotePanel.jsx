@@ -76,6 +76,34 @@ export default function VoiceToNotePanel({
   const [editingText, setEditingText] = useState('');
   const [copiedId, setCopiedId] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
+  const [playingClip, setPlayingClip] = useState(false);
+
+  const handlePlayLastClip = async () => {
+    if (!window.estraWindow?.getLastVoiceClip || playingClip) return;
+    setPlayingClip(true);
+    try {
+      const dataUrl = await window.estraWindow.getLastVoiceClip();
+      const base64 = String(dataUrl || '').split(',')[1] || '';
+      const bin = atob(base64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const blobUrl = URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
+      const audio = new Audio(blobUrl);
+      const cleanup = () => {
+        setPlayingClip(false);
+        URL.revokeObjectURL(blobUrl);
+      };
+      audio.onended = cleanup;
+      audio.onerror = () => {
+        cleanup();
+        onNotify?.('เล่นไฟล์เสียงล่าสุดไม่สำเร็จ', 'error');
+      };
+      await audio.play();
+    } catch (err) {
+      setPlayingClip(false);
+      onNotify?.(typeof err === 'string' ? err : err?.message || 'ยังไม่มีคลิปเสียงล่าสุด', 'error');
+    }
+  };
 
   // Dictionary & correction form inputs
   const [newDictWord, setNewDictWord] = useState('');
@@ -328,6 +356,17 @@ export default function VoiceToNotePanel({
           >
             <Layers size={15} />
             {voiceState?.overlayVisible ? 'ซ่อน Overlay' : `เปิด Overlay (${config?.toggleOverlayHotkey || 'Alt+V'})`}
+          </button>
+
+          <button
+            type="button"
+            className="soft-button"
+            disabled={busy || !desktop || playingClip}
+            title="เล่นฟังเสียง 16kHz ที่ระบบกรองและส่งให้ AI ล่าสุด เพื่อเช็กว่าจับเสียงได้ชัดหรือไม่"
+            onClick={() => void handlePlayLastClip()}
+          >
+            <Volume2 size={15} />
+            {playingClip ? 'กำลังเล่นเสียง...' : 'ฟังเสียงล่าสุด'}
           </button>
 
           <button

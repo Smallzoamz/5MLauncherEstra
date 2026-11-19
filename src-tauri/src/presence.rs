@@ -133,6 +133,31 @@ pub fn get_fivem_sessions() -> Result<Vec<u32>, String> {
     Ok(pids)
 }
 
+/// Prefer the actual GTA game process (`FiveM*GTAProcess.exe` / `FiveM*GameProcess.exe`)
+/// where Mumble in-game voice and game audio render, falling back to `FiveM.exe`.
+pub fn get_fivem_audio_pid() -> Option<u32> {
+    let stdout = run_tasklist().ok()?;
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r#"^"([^"]+)","(\d+)""#).unwrap());
+    let mut fallback_pid: Option<u32> = None;
+    for line in stdout.lines() {
+        let Some(caps) = re.captures(line) else { continue };
+        let name = &caps[1];
+        if !is_fivem_session_process(name) {
+            continue;
+        }
+        let Ok(pid) = caps[2].parse::<u32>() else { continue };
+        let lower = name.to_ascii_lowercase();
+        if lower.contains("gtaprocess") || lower.contains("gameprocess") {
+            return Some(pid);
+        }
+        if fallback_pid.is_none() {
+            fallback_pid = Some(pid);
+        }
+    }
+    fallback_pid
+}
+
 #[derive(Debug, Clone)]
 pub enum VdfNode {
     Str(String),
