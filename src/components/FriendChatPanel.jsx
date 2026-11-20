@@ -21,6 +21,7 @@ export default function FriendChatPanel({
   user,
   friend,
   canInvite,
+  hideBackButton = false,
   unreadHint = 0,
   onBack,
   onInvite,
@@ -139,15 +140,17 @@ export default function FriendChatPanel({
   return (
     <div className="friends-chat-view">
       <div className="friends-chat-head">
-        <button
-          type="button"
-          className="icon-button friends-chat-back"
-          onClick={onBack}
-          aria-label="กลับไปรายชื่อเพื่อน"
-          title="กลับไปรายชื่อเพื่อน"
-        >
-          <ArrowLeft size={15} />
-        </button>
+        {!hideBackButton && (
+          <button
+            type="button"
+            className="icon-button friends-chat-back"
+            onClick={onBack}
+            aria-label="กลับไปรายชื่อเพื่อน"
+            title="กลับไปรายชื่อเพื่อน"
+          >
+            <ArrowLeft size={15} />
+          </button>
+        )}
         <UserAvatar user={friend} showPresence />
         <div className="friend-meta">
           <strong>{friend.displayName}</strong>

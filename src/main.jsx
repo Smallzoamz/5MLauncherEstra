@@ -11,6 +11,7 @@ const isPerfWindow = windowMode === 'perf';
 const isClockWindow = windowMode === 'clock';
 const isCrpOverlayWindow = windowMode === 'crp-overlay';
 const isVoiceNoteWindow = windowMode === 'voice-note';
+const isFriendChatWindow = windowMode === 'friend-chat';
 if (window.estraWindow && !isOverlayWindow && !isPerfWindow && !isClockWindow && !isCrpOverlayWindow && !isVoiceNoteWindow) {
   document.documentElement.classList.add('desktop-app');
 }
@@ -22,6 +23,7 @@ import PerfOverlayApp from './components/PerfOverlayApp';
 import ClockOverlayApp from './components/ClockOverlayApp';
 import CrpOverlayApp from './components/CrpOverlayApp';
 import VoiceNoteOverlayApp from './components/VoiceNoteOverlayApp';
+import FriendChatWindowApp from './components/FriendChatWindowApp';
 import './index.css';
 
 if (!guardState.blocked) {
@@ -37,6 +39,8 @@ if (!guardState.blocked) {
         <CrpOverlayApp desktopWindow />
       ) : isVoiceNoteWindow ? (
         <VoiceNoteOverlayApp desktopWindow />
+      ) : isFriendChatWindow ? (
+        <FriendChatWindowApp />
       ) : (
         <App />
       )}

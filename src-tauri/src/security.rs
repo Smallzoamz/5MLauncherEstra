@@ -164,8 +164,31 @@ pub fn is_allowed_webview_label(label: &str, allow_overlay: bool) -> bool {
         || (allow_overlay
             && matches!(
                 label,
-                "overlay" | "perf-overlay" | "clock-overlay" | "crp-overlay" | "voice-note-overlay"
+                "overlay"
+                    | "perf-overlay"
+                    | "clock-overlay"
+                    | "crp-overlay"
+                    | "voice-note-overlay"
+                    | "friend-chat"
             ))
+}
+
+pub fn verify_social_ipc_caller(webview: &tauri::Webview) -> Result<(), String> {
+    if is_tampered() {
+        return Err("ไม่สามารถดำเนินการได้ในขณะนี้".to_string());
+    }
+    if !matches!(webview.label(), "main" | "friend-chat") {
+        return Err("ไม่ได้รับอนุญาตให้เรียกใช้งานคำสั่งนี้".to_string());
+    }
+    let is_release = !cfg!(debug_assertions);
+    let url = webview
+        .url()
+        .map_err(|_| "ไม่สามารถยืนยันต้นทางของคำสั่งได้".to_string())?;
+    if !is_allowed_webview_url(&url, is_release) {
+        mark_tampered();
+        return Err("ไม่ได้รับอนุญาตให้เรียกใช้งานจากต้นทางนี้".to_string());
+    }
+    Ok(())
 }
 
 pub fn is_allowed_webview_url(url: &Url, is_release: bool) -> bool {

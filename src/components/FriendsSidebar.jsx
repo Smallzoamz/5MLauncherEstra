@@ -44,6 +44,7 @@ export default function FriendsSidebar({
   realtimeAccessToken,
   socialServerUrl,
   chatRealtimeTick,
+  onOpenFriendChatWindow,
   onRequestConfirm
 }) {
   const [tab, setTab] = useState('friends');
@@ -124,6 +125,16 @@ export default function FriendsSidebar({
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleOpenFriendChat = friend => {
+    if (!friend?.id || friend.isDemo) return;
+    if (typeof onOpenFriendChatWindow === 'function' && window.estraWindow?.openFriendChatWindow) {
+      void onOpenFriendChatWindow(friend);
+      return;
+    }
+    setTab('friends');
+    setActiveChatFriendId(friend.id);
   };
 
   return (
@@ -350,7 +361,7 @@ export default function FriendsSidebar({
                           canChat={!friend.isDemo && typeof onFetchChatHistory === 'function'}
                           canInvite={!!activeServer?.ip && !friend.isDemo && friend.presence !== 'offline' && typeof onInviteFriend === 'function'}
                           activeServerName={activeServer?.name}
-                          onOpenChat={() => { setTab('friends'); setActiveChatFriendId(friend.id); }}
+                          onOpenChat={() => handleOpenFriendChat(friend)}
                           onToggleFavorite={() => onToggleFavoriteFriend(friend.id, !friend.isFavorite)}
                           onRemove={() => {
                             if (onRequestConfirm) {
@@ -410,7 +421,7 @@ export default function FriendsSidebar({
                           canChat={!friend.isDemo && typeof onFetchChatHistory === 'function'}
                           canInvite={!!activeServer?.ip && !friend.isDemo && friend.presence !== 'offline' && typeof onInviteFriend === 'function'}
                           activeServerName={activeServer?.name}
-                          onOpenChat={() => { setTab('friends'); setActiveChatFriendId(friend.id); }}
+                          onOpenChat={() => handleOpenFriendChat(friend)}
                           onToggleFavorite={() => onToggleFavoriteFriend(friend.id, !friend.isFavorite)}
                           onRemove={() => {
                             if (onRequestConfirm) {
@@ -538,7 +549,11 @@ export default function FriendsSidebar({
 function FriendRow({ friend, nowTick, unreadCount = 0, canChat = false, canInvite, activeServerName, onOpenChat, onToggleFavorite, onRemove, onJoin, onInvite }) {
   const statusText = presenceLabel(friend, nowTick);
   return (
-    <li className={`friend-row ${friend.presence}`}>
+    <li
+      className={`friend-row ${friend.presence}`}
+      onDoubleClick={() => { if (canChat) onOpenChat?.(); }}
+      title={canChat ? 'ดับเบิลคลิกเพื่อเปิดหน้าต่างแชท' : undefined}
+    >
       <UserAvatar user={friend} showPresence />
       <div className="friend-meta">
         <strong>

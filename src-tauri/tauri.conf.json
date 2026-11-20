@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Estra FiveM Launcher",
-  "version": "2.3.5",
+  "version": "2.3.6",
   "identifier": "local.fivemlauncher.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -14,10 +14,10 @@
       {
         "label": "main",
         "title": "Estra FiveM Launcher",
-        "width": 1240,
-        "height": 760,
-        "minWidth": 920,
-        "minHeight": 620,
+        "width": 1420,
+        "height": 860,
+        "minWidth": 1024,
+        "minHeight": 680,
         "center": true,
         "resizable": true,
         "decorations": false,

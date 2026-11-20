@@ -2,19 +2,14 @@ import React, { useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
-  BookOpen,
-  Camera,
   ChevronDown,
   ChevronRight,
   Gamepad2,
+  Gauge,
   Globe,
   Headphones,
   History,
-  Home,
-  Layers,
-  PackageCheck,
   Plus,
-  Search,
   Settings2,
   Star,
   Trash2,
@@ -114,12 +109,9 @@ export default function ServerSidebar({
   onOpenSettings,
   onOpenMicTest,
   onOpenHistory,
-  onOpenPatcher,
   onOpenCacheModal,
-  onOpenGuide,
-  hasLauncherUpdate,
+  onOpenPerfPresets,
   social,
-  crpAddonInstalled = false,
   onOpenAuth,
   communityLinks,
   onOpenCommunityLink
@@ -227,32 +219,6 @@ export default function ServerSidebar({
         <nav className="rail-primary-nav" aria-label="นำทางหลัก">
           <button
             type="button"
-            className={`rail-nav-item${centerTab === 'general' ? ' active' : ''}`}
-            onClick={() => onChangeTab('general')}
-          >
-            <Home size={16} />
-            <span>หน้าหลัก</span>
-          </button>
-          <button
-            type="button"
-            className="rail-nav-item"
-            onClick={onOpenLibrary}
-            aria-label="ค้นหาเมือง"
-          >
-            <Search size={16} />
-            <span>ค้นหาเมือง</span>
-          </button>
-          <button
-            type="button"
-            className={`rail-nav-item${hasLauncherUpdate ? ' has-update-badge' : ''}`}
-            onClick={onOpenPatcher}
-            aria-label="ศูนย์แพตช์และอัปเดต"
-          >
-            <PackageCheck size={16} />
-            <span>แพตช์ &amp; อัปเดต</span>
-          </button>
-          <button
-            type="button"
             className="rail-nav-item"
             onClick={onOpenLibrary}
             aria-label="ดูรายการเมืองทั้งหมด"
@@ -260,6 +226,15 @@ export default function ServerSidebar({
             <Gamepad2 size={16} />
             <span>เมืองของฉัน</span>
             <span className="rail-nav-count">{servers.length}</span>
+          </button>
+          <button
+            type="button"
+            className="rail-nav-item"
+            onClick={onOpenPerfPresets}
+            aria-label="ปรับกราฟิก 1 คลิก"
+          >
+            <Gauge size={16} />
+            <span>ปรับกราฟิก 1 คลิก</span>
           </button>
         </nav>
 
@@ -277,25 +252,6 @@ export default function ServerSidebar({
           </button>
           {toolsOpen && (
             <div className="rail-tools-list">
-              <button
-                type="button"
-                className={`rail-tool-item${centerTab === 'screenshots' ? ' active' : ''}`}
-                onClick={() => onChangeTab('screenshots')}
-                aria-label="คลังภาพหน้าจอ"
-              >
-                <Camera size={15} />
-                <span>คลังภาพหน้าจอ</span>
-              </button>
-              <button
-                type="button"
-                className={`rail-tool-item${centerTab === 'addons' ? ' active' : ''}`}
-                onClick={() => onChangeTab('addons')}
-                aria-label="ฟีเจอร์เสริม Add-ons"
-              >
-                <Layers size={15} />
-                <span>ฟีเจอร์เสริม</span>
-                {crpAddonInstalled && <span className="rail-tool-dot" title="ติดตั้ง FiveM C-RP-SRP Overlay แล้ว" />}
-              </button>
               <button
                 type="button"
                 className="rail-tool-item"
@@ -331,15 +287,6 @@ export default function ServerSidebar({
               >
                 <Settings2 size={15} />
                 <span>การตั้งค่า</span>
-              </button>
-              <button
-                type="button"
-                className="rail-tool-item"
-                onClick={onOpenGuide}
-                aria-label="คู่มือการใช้งาน"
-              >
-                <BookOpen size={15} />
-                <span>คู่มือการใช้งาน</span>
               </button>
             </div>
           )}

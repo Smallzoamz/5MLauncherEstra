@@ -12,6 +12,7 @@ import AddonsHub from './AddonsHub';
 import { CrashAdvisorContent } from './CrashAdvisorModal';
 import ModPresetPanel from './ModPresetPanel';
 import NetworkWatcherPanel from './NetworkWatcherPanel';
+import PerfPresetsPanel from './PerfPresetsPanel';
 import { CLEAN_PURE_PRESET_ID, evaluatePureModeCompatibility } from '../services/modPresetService';
 import { APP_VERSION } from '../shared/patcherConfig';
 import { SERVER_TAGS, DEFAULT_SERVER_TAG, normalizeServerTag } from '../shared/serverTags';
@@ -23,6 +24,7 @@ import {
   BookOpen,
   Clock,
   FileWarning,
+  Gauge,
   Layers,
   Play,
   ArrowUpRight,
@@ -119,7 +121,13 @@ export default function MainLauncher({
   onUpdateWatcher,
   onRearmWatcher,
   onQuickJoinWatchedServer,
-  onDismissWatcherAlert
+  onDismissWatcherAlert,
+  perfPresetsState = null,
+  perfPresetsBusy = false,
+  onRefreshPerfPresets,
+  onApplyPerfPreset,
+  onRestorePerfBackup,
+  onOpenGtavSettingsFolder
 }) {
   const [editing, setEditing] = useState(false);
   const [ip, setIp] = useState(server?.ip || '');
@@ -361,6 +369,15 @@ export default function MainLauncher({
             <button
               type="button"
               role="tab"
+              aria-selected={discoverSubTab === 'perf-presets'}
+              className={`diag-subtab-btn${discoverSubTab === 'perf-presets' ? ' active' : ''}`}
+              onClick={() => onChangeDiscoverSubTab?.('perf-presets')}
+            >
+              <Gauge size={14} /> กราฟิก 1 คลิก (FPS Presets)
+            </button>
+            <button
+              type="button"
+              role="tab"
               aria-selected={discoverSubTab === 'mods'}
               className={`diag-subtab-btn${discoverSubTab === 'mods' ? ' active' : ''}`}
               onClick={() => onChangeDiscoverSubTab?.('mods')}
@@ -426,6 +443,19 @@ export default function MainLauncher({
                 </div>
               </div>
             </>
+          )}
+
+          {discoverSubTab === 'perf-presets' && (
+            <PerfPresetsPanel
+              perfState={perfPresetsState}
+              busy={perfPresetsBusy || busy}
+              fivemRunning={fivemRunning}
+              onRefresh={onRefreshPerfPresets}
+              onApplyPreset={onApplyPerfPreset}
+              onRestoreBackup={onRestorePerfBackup}
+              onOpenFolder={onOpenGtavSettingsFolder}
+              onRequestConfirm={onRequestConfirm}
+            />
           )}
 
           {discoverSubTab === 'mods' && (

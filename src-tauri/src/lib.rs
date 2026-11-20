@@ -8,6 +8,7 @@ pub mod network_diag;
 pub mod overlay;
 pub mod patcher;
 pub mod perf_overlay;
+pub mod perf_presets;
 pub mod player_name;
 pub mod presence;
 pub mod screenshots;
@@ -47,6 +48,10 @@ use crate::perf_overlay::{
     ensure_clock_overlay_window, ensure_perf_overlay_window, ClockOverlaySettings,
     ClockOverlayState, PerfMetricsSnapshot, PerfOverlayManager, PerfOverlaySettings,
 };
+use crate::perf_presets::{
+    apply_game_perf_preset, get_game_perf_presets_state, open_gtav_settings_folder,
+    restore_game_perf_backup, GamePerfPresetsState,
+};
 use crate::presence::{get_system_presence, SystemPresence};
 use crate::screenshots::{
     capture_screenshot_now, copy_screenshot_to_clipboard_by_dir, delete_screenshot_by_dir,
@@ -67,8 +72,20 @@ use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use tauri::menu::{MenuBuilder, MenuItem, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tokio::sync::Mutex as AsyncMutex;
+
+const FRIEND_CHAT_LABEL: &str = "friend-chat";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FriendChatOpenPayload {
+    pub friend_id: String,
+    #[serde(default)]
+    pub active_server: Option<serde_json::Value>,
+    #[serde(default)]
+    pub social_server_url: Option<String>,
+}
 
 pub struct AppState {
     pub monitor: GameSessionMonitor,
@@ -82,6 +99,7 @@ pub struct AppState {
     pub perf_overlay: PerfOverlayManager,
     pub crp_overlay: CrpOverlayManager,
     pub voice_note: VoiceNoteManager,
+    pub friend_chat_pending: Mutex<Option<FriendChatOpenPayload>>,
 }
 
 impl Default for AppState {
@@ -98,8 +116,70 @@ impl Default for AppState {
             perf_overlay: PerfOverlayManager::default(),
             crp_overlay: CrpOverlayManager::default(),
             voice_note: VoiceNoteManager::default(),
+            friend_chat_pending: Mutex::new(None),
         }
     }
+}
+
+fn ensure_friend_chat_window(app: &AppHandle) -> Result<WebviewWindow, String> {
+    if let Some(existing) = app.get_webview_window(FRIEND_CHAT_LABEL) {
+        return Ok(existing);
+    }
+    let win = WebviewWindowBuilder::new(
+        app,
+        FRIEND_CHAT_LABEL,
+        WebviewUrl::App("index.html?window=friend-chat".into()),
+    )
+    .title("Estra Chat")
+    .inner_size(820.0, 600.0)
+    .min_inner_size(560.0, 440.0)
+    .decorations(false)
+    .resizable(true)
+    .center()
+    .visible(false)
+    .build()
+    .map_err(|e| format!("สร้างหน้าต่างแชทไม่สำเร็จ: {e}"))?;
+
+    security::lock_webview_window(&win);
+    let win_clone = win.clone();
+    win.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = win_clone.hide();
+        }
+    });
+    Ok(win)
+}
+
+fn fit_main_window_to_monitor(win: &WebviewWindow) {
+    const TARGET_W: f64 = 1420.0;
+    const TARGET_H: f64 = 860.0;
+    const MIN_W: f64 = 1024.0;
+    const MIN_H: f64 = 680.0;
+
+    let monitor = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| win.primary_monitor().ok().flatten());
+    let Some(mon) = monitor else {
+        return;
+    };
+    let scale = mon.scale_factor().max(1.0);
+    let mon_w = (mon.size().width as f64) / scale;
+    let mon_h = (mon.size().height as f64) / scale;
+    // Leave comfortable breathing room for Windows taskbar & borders
+    let avail_w = (mon_w - 48.0).max(860.0);
+    let avail_h = (mon_h - 76.0).max(600.0);
+
+    let clamped_min_w = MIN_W.min(avail_w);
+    let clamped_min_h = MIN_H.min(avail_h);
+    let _ = win.set_min_size(Some(tauri::LogicalSize::new(clamped_min_w, clamped_min_h)));
+
+    let final_w = TARGET_W.min(avail_w).max(clamped_min_w);
+    let final_h = TARGET_H.min(avail_h).max(clamped_min_h);
+    let _ = win.set_size(tauri::LogicalSize::new(final_w, final_h));
+    let _ = win.center();
 }
 
 fn restore_main_window(app: &AppHandle) {
@@ -364,8 +444,102 @@ async fn social_request_cmd(
     body: Option<serde_json::Value>,
     social_server_url: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    crate::security::verify_ipc_caller(&webview, false)?;
+    crate::security::verify_social_ipc_caller(&webview)?;
     social_request(&state.social, method, path, body, social_server_url).await
+}
+
+#[tauri::command]
+async fn open_friend_chat_window_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    friend_id: String,
+    active_server: Option<serde_json::Value>,
+    social_server_url: Option<String>,
+) -> Result<(), String> {
+    crate::security::verify_social_ipc_caller(&webview)?;
+    let payload = FriendChatOpenPayload {
+        friend_id: friend_id.trim().chars().take(128).collect(),
+        active_server,
+        social_server_url,
+    };
+    if let Ok(mut guard) = state.friend_chat_pending.lock() {
+        *guard = Some(payload.clone());
+    }
+    let win = ensure_friend_chat_window(&app)?;
+    let _ = win.unminimize();
+    let _ = win.show();
+    let _ = win.set_focus();
+    let _ = app.emit_to(FRIEND_CHAT_LABEL, "estra://friend-chat-open", payload);
+    Ok(())
+}
+
+#[tauri::command]
+fn drain_friend_chat_open_cmd(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+) -> Result<Option<FriendChatOpenPayload>, String> {
+    crate::security::verify_social_ipc_caller(&webview)?;
+    let mut guard = state
+        .friend_chat_pending
+        .lock()
+        .map_err(|_| "อ่านข้อมูลแชทไม่สำเร็จ".to_string())?;
+    Ok(guard.take())
+}
+
+#[tauri::command]
+fn close_friend_chat_window_cmd(webview: tauri::Webview, app: AppHandle) -> Result<(), String> {
+    crate::security::verify_social_ipc_caller(&webview)?;
+    if let Some(win) = app.get_webview_window(FRIEND_CHAT_LABEL) {
+        let _ = win.hide();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn minimize_friend_chat_window_cmd(webview: tauri::Webview, app: AppHandle) -> Result<(), String> {
+    crate::security::verify_social_ipc_caller(&webview)?;
+    if let Some(win) = app.get_webview_window(FRIEND_CHAT_LABEL) {
+        let _ = win.minimize();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn toggle_maximize_friend_chat_window_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+) -> Result<(), String> {
+    crate::security::verify_social_ipc_caller(&webview)?;
+    if let Some(win) = app.get_webview_window(FRIEND_CHAT_LABEL) {
+        if win.is_maximized().unwrap_or(false) {
+            let _ = win.unmaximize();
+        } else {
+            let _ = win.maximize();
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_friend_chat_always_on_top_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+    pinned: bool,
+) -> Result<bool, String> {
+    crate::security::verify_social_ipc_caller(&webview)?;
+    if let Some(win) = app.get_webview_window(FRIEND_CHAT_LABEL) {
+        win.set_always_on_top(pinned)
+            .map_err(|e| format!("ตั้งค่าปักหมุดหน้าต่างไม่สำเร็จ: {e}"))?;
+    }
+    Ok(pinned)
+}
+
+#[tauri::command]
+fn notify_friend_chat_sync_cmd(webview: tauri::Webview, app: AppHandle) -> Result<(), String> {
+    crate::security::verify_social_ipc_caller(&webview)?;
+    let _ = app.emit_to("main", "estra://friend-chat-sync", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -853,6 +1027,55 @@ async fn probe_server_route_cmd(
     probe_server_route(&target, samples).await
 }
 
+#[tauri::command]
+async fn get_game_perf_presets_cmd(
+    webview: tauri::Webview,
+) -> Result<GamePerfPresetsState, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    tokio::task::spawn_blocking(get_game_perf_presets_state)
+        .await
+        .map_err(|_| "อ่านค่ากราฟิก GTA V ไม่สำเร็จ".to_string())?
+}
+
+#[tauri::command]
+async fn apply_game_perf_preset_cmd(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    preset_id: String,
+) -> Result<GamePerfPresetsState, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    let _guard = state
+        .mutation_lock
+        .try_lock()
+        .map_err(|_| "มีคำสั่งกำลังทำงาน กรุณารอสักครู่".to_string())?;
+    tokio::task::spawn_blocking(move || apply_game_perf_preset(&preset_id))
+        .await
+        .map_err(|_| "ปรับพรีเซ็ตกราฟิกไม่สำเร็จ".to_string())?
+}
+
+#[tauri::command]
+async fn restore_game_perf_backup_cmd(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+) -> Result<GamePerfPresetsState, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    let _guard = state
+        .mutation_lock
+        .try_lock()
+        .map_err(|_| "มีคำสั่งกำลังทำงาน กรุณารอสักครู่".to_string())?;
+    tokio::task::spawn_blocking(restore_game_perf_backup)
+        .await
+        .map_err(|_| "คืนค่ากราฟิกเดิมไม่สำเร็จ".to_string())?
+}
+
+#[tauri::command]
+async fn open_gtav_settings_folder_cmd(webview: tauri::Webview) -> Result<String, String> {
+    crate::security::verify_ipc_caller(&webview, false)?;
+    tokio::task::spawn_blocking(open_gtav_settings_folder)
+        .await
+        .map_err(|_| "เปิดโฟลเดอร์ settings.xml ไม่สำเร็จ".to_string())?
+}
+
 pub fn run() {
     let startup_args: Vec<String> = std::env::args().collect();
     let launched_autostart = is_autostart_arg(&startup_args);
@@ -948,6 +1171,7 @@ pub fn run() {
 
             if let Some(win) = app.get_webview_window("main") {
                 security::lock_webview_window(&win);
+                fit_main_window_to_monitor(&win);
                 let win_clone = win.clone();
                 win.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -1000,6 +1224,13 @@ pub fn run() {
             window_close_cmd,
             open_external_url_cmd,
             social_request_cmd,
+            open_friend_chat_window_cmd,
+            drain_friend_chat_open_cmd,
+            close_friend_chat_window_cmd,
+            minimize_friend_chat_window_cmd,
+            toggle_maximize_friend_chat_window_cmd,
+            set_friend_chat_always_on_top_cmd,
+            notify_friend_chat_sync_cmd,
             get_startup_settings_cmd,
             set_startup_settings_cmd,
             set_screenshot_config_cmd,
@@ -1041,6 +1272,10 @@ pub fn run() {
             delete_mod_preset_cmd,
             open_mod_preset_folder_cmd,
             probe_server_route_cmd,
+            get_game_perf_presets_cmd,
+            apply_game_perf_preset_cmd,
+            restore_game_perf_backup_cmd,
+            open_gtav_settings_folder_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Estra FiveM Launcher");

@@ -208,6 +208,38 @@ export function initDesktopBridge() {
     openModPresetFolder: ({ fivemPath = '', presetId }) =>
       invoke('open_mod_preset_folder_cmd', { fivemPath, presetId }),
     probeServerRoute: ({ target, samples = 6 }) =>
-      invoke('probe_server_route_cmd', { target, samples })
+      invoke('probe_server_route_cmd', { target, samples }),
+    getGamePerfPresets: () => invoke('get_game_perf_presets_cmd'),
+    applyGamePerfPreset: presetId => invoke('apply_game_perf_preset_cmd', { presetId }),
+    restoreGamePerfBackup: () => invoke('restore_game_perf_backup_cmd'),
+    openGtavSettingsFolder: () => invoke('open_gtav_settings_folder_cmd'),
+    openFriendChatWindow: ({ friendId, activeServer = null, socialServerUrl = null }) =>
+      invoke('open_friend_chat_window_cmd', { friendId, activeServer, socialServerUrl }),
+    drainFriendChatOpen: () => invoke('drain_friend_chat_open_cmd'),
+    closeFriendChatWindow: () => invoke('close_friend_chat_window_cmd'),
+    minimizeFriendChatWindow: () => invoke('minimize_friend_chat_window_cmd'),
+    toggleMaximizeFriendChatWindow: () => invoke('toggle_maximize_friend_chat_window_cmd'),
+    setFriendChatAlwaysOnTop: pinned => invoke('set_friend_chat_always_on_top_cmd', { pinned: Boolean(pinned) }),
+    notifyFriendChatSync: () => invoke('notify_friend_chat_sync_cmd'),
+    onFriendChatOpen: callback => {
+      if (typeof callback !== 'function') return () => {};
+      let active = true;
+      let unlistenFn = null;
+      void listen('estra://friend-chat-open', event => { if (active) callback(event.payload); }).then(unlisten => {
+        if (active) unlistenFn = unlisten;
+        else unlisten();
+      });
+      return () => { active = false; unlistenFn?.(); };
+    },
+    onFriendChatSync: callback => {
+      if (typeof callback !== 'function') return () => {};
+      let active = true;
+      let unlistenFn = null;
+      void listen('estra://friend-chat-sync', () => { if (active) callback(); }).then(unlisten => {
+        if (active) unlistenFn = unlisten;
+        else unlisten();
+      });
+      return () => { active = false; unlistenFn?.(); };
+    }
   });
 }

@@ -42,6 +42,12 @@ import {
   probeServerRoute,
   saveWatcherMap
 } from './services/serverWatcherService';
+import {
+  applyGamePerfPreset,
+  getGamePerfPresetsState,
+  openGtavSettingsFolder,
+  restoreGamePerfBackup
+} from './services/perfPresetService';
 import CityBackground from './components/CityBackground';
 import audioService from './services/audioService';
 import presenceService from './services/presenceService';
@@ -217,6 +223,8 @@ export default function App() {
   const [crashFixFeedback, setCrashFixFeedback] = useState(null);
   const [modState, setModState] = useState(null);
   const [modBusy, setModBusy] = useState(false);
+  const [perfPresetsState, setPerfPresetsState] = useState(null);
+  const [perfPresetsBusy, setPerfPresetsBusy] = useState(false);
   const [routeReportByServer, setRouteReportByServer] = useState({});
   const [pingHistoryByServer, setPingHistoryByServer] = useState({});
   const [routeProbing, setRouteProbing] = useState(false);
@@ -827,7 +835,30 @@ export default function App() {
     return () => clearInterval(timer);
   }, [presence.fivem?.running, screenStage, social.authenticated, social.user?.id, active?.id, flushActivePlaytime]);
 
+  useEffect(() => window.estraWindow?.onFriendChatSync?.(() => {
+    void refreshSocial();
+  }), [refreshSocial]);
+
+  const handleOpenFriendChatWindow = useCallback(async friend => {
+    if (!friend?.id || !window.estraWindow?.openFriendChatWindow) return;
+    try {
+      await window.estraWindow.openFriendChatWindow({
+        friendId: friend.id,
+        activeServer: active ? { id: active.id, name: active.name, ip: active.ip } : null,
+        socialServerUrl: settings.socialServerUrl
+      });
+      setFriendsMobileOpen(false);
+    } catch (err) {
+      setUiNotice({
+        message: err?.message || 'เปิดหน้าต่างแชทไม่สำเร็จ',
+        tone: 'error',
+        _seq: ++alertSeqRef.current
+      });
+    }
+  }, [active, settings.socialServerUrl]);
+
   const handleLogout = async () => {
+    void window.estraWindow?.closeFriendChatWindow?.().catch(() => {});
     const prevUserId = social.user?.id;
     clearTimeout(serverSyncTimerRef.current);
     const sess = activePlaySessionRef.current;
@@ -1262,10 +1293,78 @@ export default function App() {
     void launchCity(city);
   }, []);
 
+  const handleRefreshPerfPresets = useCallback(async () => {
+    setPerfPresetsBusy(true);
+    try {
+      const next = await getGamePerfPresetsState();
+      setPerfPresetsState(next);
+    } catch {
+      setPerfPresetsState(null);
+    } finally {
+      setPerfPresetsBusy(false);
+    }
+  }, []);
+
+  const handleApplyPerfPreset = useCallback(async presetId => {
+    setPerfPresetsBusy(true);
+    try {
+      const next = await applyGamePerfPreset(presetId);
+      setPerfPresetsState(next);
+      const chosen = next?.presets?.find(p => p.id === presetId);
+      setUiNotice({
+        message: `ปรับกราฟิกเป็น "${chosen?.name || presetId}" สำเร็จ! เปิด FiveM เพื่อใช้งานค่าใหม่ได้เลย`,
+        tone: 'notice',
+        _seq: ++alertSeqRef.current
+      });
+    } catch (err) {
+      setUiNotice({
+        message: err?.message || 'ปรับพรีเซ็ตกราฟิกไม่สำเร็จ',
+        tone: 'error',
+        _seq: ++alertSeqRef.current
+      });
+    } finally {
+      setPerfPresetsBusy(false);
+    }
+  }, []);
+
+  const handleRestorePerfBackup = useCallback(async () => {
+    setPerfPresetsBusy(true);
+    try {
+      const next = await restoreGamePerfBackup();
+      setPerfPresetsState(next);
+      setUiNotice({
+        message: 'คืนค่า settings.xml เดิมของ GTA V เรียบร้อยแล้ว',
+        tone: 'notice',
+        _seq: ++alertSeqRef.current
+      });
+    } catch (err) {
+      setUiNotice({
+        message: err?.message || 'คืนค่า settings.xml เดิมไม่สำเร็จ',
+        tone: 'error',
+        _seq: ++alertSeqRef.current
+      });
+    } finally {
+      setPerfPresetsBusy(false);
+    }
+  }, []);
+
+  const handleOpenGtavSettingsFolder = useCallback(async () => {
+    try {
+      await openGtavSettingsFolder();
+    } catch (err) {
+      setUiNotice({
+        message: err?.message || 'เปิดโฟลเดอร์ settings.xml ไม่สำเร็จ',
+        tone: 'error',
+        _seq: ++alertSeqRef.current
+      });
+    }
+  }, []);
+
   useEffect(() => {
     if (screenStage !== 'launcher') return;
     void handleRefreshModPresets();
-  }, [screenStage, settings.fivemPath, handleRefreshModPresets]);
+    void handleRefreshPerfPresets();
+  }, [screenStage, settings.fivemPath, handleRefreshModPresets, handleRefreshPerfPresets]);
 
   useEffect(() => {
     if (screenStage !== 'launcher') return;
@@ -1768,12 +1867,13 @@ export default function App() {
             onOpenHistory={() => setModal('history')}
             onOpenSettings={() => setModal('settings')}
             onOpenMicTest={() => setModal('mic')}
-            onOpenPatcher={() => setModal('patcher')}
             onOpenCacheModal={() => setModal('cache')}
-            onOpenGuide={handleOpenGuide}
-            hasLauncherUpdate={!!launcherUpdate?.available}
+            onOpenPerfPresets={() => {
+              setDiscoverSubTab('perf-presets');
+              handleChangeTab('discover');
+              void handleRefreshPerfPresets();
+            }}
             social={social}
-            crpAddonInstalled={Boolean(crpAddonState?.installed || voiceNoteState?.installed)}
             onOpenAuth={openAccountModal}
             communityLinks={communityLinks}
             onOpenCommunityLink={handleOpenCommunityLink}
@@ -1874,6 +1974,12 @@ export default function App() {
               onRearmWatcher={handleRearmWatcher}
               onQuickJoinWatchedServer={handleQuickJoinWatchedServer}
               onDismissWatcherAlert={() => setWatcherReadyAlert(null)}
+              perfPresetsState={perfPresetsState}
+              perfPresetsBusy={perfPresetsBusy}
+              onRefreshPerfPresets={handleRefreshPerfPresets}
+              onApplyPerfPreset={handleApplyPerfPreset}
+              onRestorePerfBackup={handleRestorePerfBackup}
+              onOpenGtavSettingsFolder={handleOpenGtavSettingsFolder}
             />
           </div>
 
@@ -1948,6 +2054,7 @@ export default function App() {
             realtimeAccessToken={realtimeAccessToken}
             socialServerUrl={resolveSocialServerUrl(settings.socialServerUrl)}
             chatRealtimeTick={chatRealtimeTick}
+            onOpenFriendChatWindow={handleOpenFriendChatWindow}
             onRequestConfirm={requestConfirm}
           />
         </div>
