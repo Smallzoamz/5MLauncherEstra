@@ -10,8 +10,6 @@ use std::sync::OnceLock;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-const BACKUP_FILE_NAME: &str = "settings.xml.estra-original.bak";
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HardwareProfile {
@@ -62,6 +60,7 @@ pub struct CurrentGraphicsSummary {
 pub struct GamePerfPresetsState {
     pub found: bool,
     pub settings_path: String,
+    pub config_source: String,
     pub has_backup: bool,
     pub active_preset_id: String, // preset id or "custom" or "none"
     pub hardware: HardwareProfile,
@@ -332,7 +331,7 @@ const POTATO_PRESETS: &[AdaptivePresetSpec] = &[
             ("LodScale", "0.000000"),
             ("PedLodBias", "0.000000"),
             ("VehicleLodBias", "0.000000"),
-            ("DistanceScaling", "0.000000"),
+            ("MaxLodScale", "0.000000"),
             ("CityDensity", "0.000000"),
             ("PedVarietyMultiplier", "0.000000"),
             ("VehicleVarietyMultiplier", "0.000000"),
@@ -379,7 +378,7 @@ const POTATO_PRESETS: &[AdaptivePresetSpec] = &[
             ("LodScale", "0.300000"),
             ("PedLodBias", "0.000000"),
             ("VehicleLodBias", "0.000000"),
-            ("DistanceScaling", "0.250000"),
+            ("MaxLodScale", "0.250000"),
             ("CityDensity", "0.200000"),
             ("PedVarietyMultiplier", "0.250000"),
             ("VehicleVarietyMultiplier", "0.250000"),
@@ -426,7 +425,7 @@ const POTATO_PRESETS: &[AdaptivePresetSpec] = &[
             ("LodScale", "0.500000"),
             ("PedLodBias", "0.000000"),
             ("VehicleLodBias", "0.000000"),
-            ("DistanceScaling", "0.450000"),
+            ("MaxLodScale", "0.450000"),
             ("CityDensity", "0.350000"),
             ("PedVarietyMultiplier", "0.400000"),
             ("VehicleVarietyMultiplier", "0.400000"),
@@ -479,7 +478,7 @@ const ENTRY_PRESETS: &[AdaptivePresetSpec] = &[
             ("LodScale", "0.200000"),
             ("PedLodBias", "0.000000"),
             ("VehicleLodBias", "0.000000"),
-            ("DistanceScaling", "0.200000"),
+            ("MaxLodScale", "0.200000"),
             ("CityDensity", "0.150000"),
             ("PedVarietyMultiplier", "0.200000"),
             ("VehicleVarietyMultiplier", "0.200000"),
@@ -526,7 +525,7 @@ const ENTRY_PRESETS: &[AdaptivePresetSpec] = &[
             ("LodScale", "0.600000"),
             ("PedLodBias", "0.000000"),
             ("VehicleLodBias", "0.000000"),
-            ("DistanceScaling", "0.500000"),
+            ("MaxLodScale", "0.500000"),
             ("CityDensity", "0.400000"),
             ("PedVarietyMultiplier", "0.400000"),
             ("VehicleVarietyMultiplier", "0.400000"),
@@ -573,7 +572,7 @@ const ENTRY_PRESETS: &[AdaptivePresetSpec] = &[
             ("LodScale", "0.800000"),
             ("PedLodBias", "0.000000"),
             ("VehicleLodBias", "0.000000"),
-            ("DistanceScaling", "0.750000"),
+            ("MaxLodScale", "0.750000"),
             ("CityDensity", "0.600000"),
             ("PedVarietyMultiplier", "0.600000"),
             ("VehicleVarietyMultiplier", "0.600000"),
@@ -626,7 +625,7 @@ const MID_PRESETS: &[AdaptivePresetSpec] = &[
             ("LodScale", "0.500000"),
             ("PedLodBias", "0.000000"),
             ("VehicleLodBias", "0.000000"),
-            ("DistanceScaling", "0.450000"),
+            ("MaxLodScale", "0.450000"),
             ("CityDensity", "0.350000"),
             ("PedVarietyMultiplier", "0.400000"),
             ("VehicleVarietyMultiplier", "0.400000"),
@@ -673,7 +672,7 @@ const MID_PRESETS: &[AdaptivePresetSpec] = &[
             ("LodScale", "0.800000"),
             ("PedLodBias", "0.000000"),
             ("VehicleLodBias", "0.000000"),
-            ("DistanceScaling", "0.750000"),
+            ("MaxLodScale", "0.750000"),
             ("CityDensity", "0.650000"),
             ("PedVarietyMultiplier", "0.650000"),
             ("VehicleVarietyMultiplier", "0.650000"),
@@ -720,7 +719,7 @@ const MID_PRESETS: &[AdaptivePresetSpec] = &[
             ("LodScale", "1.000000"),
             ("PedLodBias", "0.000000"),
             ("VehicleLodBias", "0.000000"),
-            ("DistanceScaling", "0.950000"),
+            ("MaxLodScale", "0.950000"),
             ("CityDensity", "0.850000"),
             ("PedVarietyMultiplier", "0.850000"),
             ("VehicleVarietyMultiplier", "0.850000"),
@@ -773,7 +772,7 @@ const HIGH_PRESETS: &[AdaptivePresetSpec] = &[
             ("LodScale", "0.700000"),
             ("PedLodBias", "0.000000"),
             ("VehicleLodBias", "0.000000"),
-            ("DistanceScaling", "0.600000"),
+            ("MaxLodScale", "0.600000"),
             ("CityDensity", "0.500000"),
             ("PedVarietyMultiplier", "0.500000"),
             ("VehicleVarietyMultiplier", "0.500000"),
@@ -820,7 +819,7 @@ const HIGH_PRESETS: &[AdaptivePresetSpec] = &[
             ("LodScale", "0.900000"),
             ("PedLodBias", "0.000000"),
             ("VehicleLodBias", "0.000000"),
-            ("DistanceScaling", "0.850000"),
+            ("MaxLodScale", "0.850000"),
             ("CityDensity", "0.750000"),
             ("PedVarietyMultiplier", "0.750000"),
             ("VehicleVarietyMultiplier", "0.750000"),
@@ -867,7 +866,7 @@ const HIGH_PRESETS: &[AdaptivePresetSpec] = &[
             ("LodScale", "1.000000"),
             ("PedLodBias", "0.000000"),
             ("VehicleLodBias", "0.000000"),
-            ("DistanceScaling", "1.000000"),
+            ("MaxLodScale", "1.000000"),
             ("CityDensity", "1.000000"),
             ("PedVarietyMultiplier", "1.000000"),
             ("VehicleVarietyMultiplier", "1.000000"),
@@ -915,8 +914,47 @@ fn resolve_windows_documents_dir() -> Option<PathBuf> {
     None
 }
 
+fn backup_path_for(settings_path: &Path) -> Option<PathBuf> {
+    let parent = settings_path.parent()?;
+    let file_name = settings_path.file_name()?.to_string_lossy();
+    Some(normalize_win_path(&parent.join(format!(
+        "{file_name}.estra-original.bak"
+    ))))
+}
+
+fn tmp_path_for(settings_path: &Path) -> Option<PathBuf> {
+    let parent = settings_path.parent()?;
+    let file_name = settings_path.file_name()?.to_string_lossy();
+    Some(normalize_win_path(&parent.join(format!("{file_name}.estra.tmp"))))
+}
+
+fn describe_config_source(settings_path: &Path) -> String {
+    let lower = settings_path.to_string_lossy().to_ascii_lowercase();
+    if lower.contains("citizenfx") && lower.ends_with("gta5_settings.xml") {
+        "FiveM (CitizenFX\\gta5_settings.xml)".into()
+    } else {
+        "GTA V (Rockstar Games\\GTA V\\settings.xml)".into()
+    }
+}
+
 pub fn locate_gtav_settings_xml() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
+    // Priority 1: FiveM's real active graphics config (%APPDATA%\CitizenFX\gta5_settings.xml)
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        if !appdata.trim().is_empty() {
+            candidates.push(PathBuf::from(&appdata).join("CitizenFX").join("gta5_settings.xml"));
+        }
+    }
+    if let Ok(profile) = std::env::var("USERPROFILE") {
+        let base = PathBuf::from(&profile);
+        candidates.push(
+            base.join("AppData")
+                .join("Roaming")
+                .join("CitizenFX")
+                .join("gta5_settings.xml"),
+        );
+    }
+    // Priority 2: Vanilla GTA V settings.xml fallback (only if FiveM hasn't created gta5_settings.xml yet)
     if let Some(docs) = resolve_windows_documents_dir() {
         candidates.push(docs.join("Rockstar Games").join("GTA V").join("settings.xml"));
     }
@@ -1038,7 +1076,8 @@ fn detect_matching_preset_id(xml: &str, specs: &[AdaptivePresetSpec]) -> String 
         "FXAA_Enabled",
         "AnisotropicFiltering",
         "CityDensity",
-        "DistanceScaling",
+        "LodScale",
+        "MaxLodScale",
     ];
     for spec in specs {
         let mut all_match = true;
@@ -1137,6 +1176,7 @@ fn build_state_for_path_with_hw(
         return Ok(GamePerfPresetsState {
             found: false,
             settings_path: String::new(),
+            config_source: String::new(),
             has_backup: false,
             active_preset_id: "none".into(),
             presets: map_specs_to_info(specs, ""),
@@ -1147,10 +1187,8 @@ fn build_state_for_path_with_hw(
 
     assert_no_links(path)?;
     let xml = fs::read_to_string(path)
-        .map_err(|e| format!("อ่านไฟล์ settings.xml ของ GTA V ไม่สำเร็จ: {e}"))?;
-    let backup_path = path
-        .parent()
-        .map(|p| normalize_win_path(&p.join(BACKUP_FILE_NAME)));
+        .map_err(|e| format!("อ่านไฟล์ตั้งค่ากราฟิกไม่สำเร็จ: {e}"))?;
+    let backup_path = backup_path_for(path);
     let has_backup = backup_path
         .as_ref()
         .map(|b| b.is_file() && assert_no_links(b).is_ok())
@@ -1161,6 +1199,7 @@ fn build_state_for_path_with_hw(
     Ok(GamePerfPresetsState {
         found: true,
         settings_path: path.to_string_lossy().into_owned(),
+        config_source: describe_config_source(path),
         has_backup,
         active_preset_id: active_id.clone(),
         presets: map_specs_to_info(specs, &active_id),
@@ -1183,27 +1222,29 @@ fn apply_preset_to_path_with_hw(
 
     let parent = settings_path
         .parent()
-        .ok_or_else(|| "ไม่พบโฟลเดอร์ settings.xml ของ GTA V".to_string())?;
+        .ok_or_else(|| "ไม่พบโฟลเดอร์ตั้งค่ากราฟิก FiveM / GTA V".to_string())?;
     assert_no_links(parent)?;
 
     let raw_xml = fs::read_to_string(settings_path)
-        .map_err(|e| format!("อ่านไฟล์ settings.xml ไม่สำเร็จ: {e}"))?;
+        .map_err(|e| format!("อ่านไฟล์ตั้งค่ากราฟิกไม่สำเร็จ: {e}"))?;
 
-    // Auto-backup original untouched settings.xml once before first modification!
-    let backup_path = normalize_win_path(&parent.join(BACKUP_FILE_NAME));
+    // Auto-backup original untouched graphics XML once before first modification!
+    let backup_path = backup_path_for(settings_path)
+        .ok_or_else(|| "สร้างเส้นทางไฟล์สำรองไม่สำเร็จ".to_string())?;
     if !backup_path.exists() {
         assert_no_links(&backup_path)?;
         fs::write(&backup_path, &raw_xml)
-            .map_err(|e| format!("สำรองไฟล์ settings.xml เดิมไม่สำเร็จ: {e}"))?;
+            .map_err(|e| format!("สำรองไฟล์ตั้งค่ากราฟิกเดิมไม่สำเร็จ: {e}"))?;
     }
 
     let updated = apply_graphics_values_to_xml(&raw_xml, spec.values)?;
-    let tmp_path = normalize_win_path(&parent.join("settings.xml.estra.tmp"));
+    let tmp_path = tmp_path_for(settings_path)
+        .ok_or_else(|| "สร้างเส้นทางไฟล์ชั่วคราวไม่สำเร็จ".to_string())?;
     assert_no_links(&tmp_path)?;
     fs::write(&tmp_path, &updated)
-        .map_err(|e| format!("เขียนไฟล์ settings.xml ชั่วคราวไม่สำเร็จ: {e}"))?;
+        .map_err(|e| format!("เขียนไฟล์ตั้งค่าชั่วคราวไม่สำเร็จ: {e}"))?;
     fs::rename(&tmp_path, settings_path)
-        .map_err(|e| format!("บันทึกไฟล์ settings.xml ไม่สำเร็จ: {e}"))?;
+        .map_err(|e| format!("บันทึกไฟล์ตั้งค่ากราฟิกไม่สำเร็จ: {e}"))?;
 
     build_state_for_path_with_hw(Some(settings_path), hardware)
 }
@@ -1213,22 +1254,21 @@ pub fn restore_backup_at_path_with_hw(
     hardware: HardwareProfile,
 ) -> Result<GamePerfPresetsState, String> {
     assert_no_links(settings_path)?;
-    let parent = settings_path
-        .parent()
-        .ok_or_else(|| "ไม่พบโฟลเดอร์ settings.xml ของ GTA V".to_string())?;
-    let backup_path = normalize_win_path(&parent.join(BACKUP_FILE_NAME));
+    let backup_path = backup_path_for(settings_path)
+        .ok_or_else(|| "ไม่พบโฟลเดอร์ตั้งค่ากราฟิก".to_string())?;
     if !backup_path.is_file() {
-        return Err("ไม่พบไฟล์สำรอง settings.xml เดิม".into());
+        return Err("ไม่พบไฟล์สำรองกราฟิกเดิม".into());
     }
     assert_no_links(&backup_path)?;
     let original = fs::read_to_string(&backup_path)
         .map_err(|e| format!("อ่านไฟล์สำรองไม่สำเร็จ: {e}"))?;
-    let tmp_path = normalize_win_path(&parent.join("settings.xml.estra.tmp"));
+    let tmp_path = tmp_path_for(settings_path)
+        .ok_or_else(|| "สร้างเส้นทางไฟล์ชั่วคราวไม่สำเร็จ".to_string())?;
     assert_no_links(&tmp_path)?;
     fs::write(&tmp_path, &original)
         .map_err(|e| format!("เตรียมไฟล์คืนค่าไม่สำเร็จ: {e}"))?;
     fs::rename(&tmp_path, settings_path)
-        .map_err(|e| format!("คืนค่า settings.xml เดิมไม่สำเร็จ: {e}"))?;
+        .map_err(|e| format!("คืนค่าไฟล์กราฟิกเดิมไม่สำเร็จ: {e}"))?;
     build_state_for_path_with_hw(Some(settings_path), hardware)
 }
 
@@ -1240,7 +1280,7 @@ pub fn get_game_perf_presets_state() -> Result<GamePerfPresetsState, String> {
 pub fn apply_game_perf_preset(preset_id: &str) -> Result<GamePerfPresetsState, String> {
     ensure_game_closed()?;
     let path = locate_gtav_settings_xml().ok_or_else(|| {
-        "ไม่พบไฟล์ Documents\\Rockstar Games\\GTA V\\settings.xml — กรุณาเปิดเกม GTA V / FiveM อย่างน้อย 1 ครั้งก่อน".to_string()
+        "ไม่พบไฟล์ %APPDATA%\\CitizenFX\\gta5_settings.xml — กรุณาเปิดเกม FiveM อย่างน้อย 1 ครั้งก่อน".to_string()
     })?;
     apply_preset_to_path_with_hw(&path, preset_id, detect_hardware_profile())
 }
@@ -1248,14 +1288,14 @@ pub fn apply_game_perf_preset(preset_id: &str) -> Result<GamePerfPresetsState, S
 pub fn restore_game_perf_backup() -> Result<GamePerfPresetsState, String> {
     ensure_game_closed()?;
     let path = locate_gtav_settings_xml().ok_or_else(|| {
-        "ไม่พบไฟล์ Documents\\Rockstar Games\\GTA V\\settings.xml".to_string()
+        "ไม่พบไฟล์ %APPDATA%\\CitizenFX\\gta5_settings.xml".to_string()
     })?;
     restore_backup_at_path_with_hw(&path, detect_hardware_profile())
 }
 
 pub fn open_gtav_settings_folder() -> Result<String, String> {
     let path = locate_gtav_settings_xml().ok_or_else(|| {
-        "ไม่พบไฟล์ settings.xml ของ GTA V".to_string()
+        "ไม่พบไฟล์ตั้งค่ากราฟิกของ FiveM / GTA V".to_string()
     })?;
     let folder = path.parent().unwrap_or(&path);
     #[cfg(windows)]
@@ -1305,7 +1345,7 @@ mod tests {
     <PostFX value="3" />
     <DoF value="true" />
     <MotionBlurStrength value="0.500000" />
-    <DistanceScaling value="1.000000" />
+    <MaxLodScale value="1.000000" />
     <CityDensity value="1.000000" />
     <PedVarietyMultiplier value="1.000000" />
     <VehicleVarietyMultiplier value="1.000000" />
@@ -1396,7 +1436,7 @@ mod tests {
         let potato_raw = fs::read_to_string(&settings_path).unwrap();
         assert!(potato_raw.contains(r#"<LodScale value="0.000000" />"#));
         assert!(potato_raw.contains(r#"<CityDensity value="0.000000" />"#));
-        assert!(potato_raw.contains(r#"<DistanceScaling value="0.000000" />"#));
+        assert!(potato_raw.contains(r#"<MaxLodScale value="0.000000" />"#));
         assert!(potato_raw.contains(r#"<ScreenWidth value="2560" />"#));
         assert!(potato_raw.contains(r#"<RefreshRate value="165" />"#));
 
@@ -1436,5 +1476,8 @@ mod tests {
             "Detected Host Hardware: GPU={} ({} MB VRAM, shared {} MB, iGPU={}) | RAM={} GB | CPU={} threads | Tier={}",
             hw.gpu_name, hw.vram_mb, hw.shared_mem_mb, hw.is_integrated, hw.ram_gb, hw.cpu_cores, hw.tier
         );
+        if let Some(p) = locate_gtav_settings_xml() {
+            println!("Resolved FiveM/GTA V config path: {}", p.display());
+        }
     }
 }

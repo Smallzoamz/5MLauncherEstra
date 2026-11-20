@@ -16,6 +16,7 @@ import { getSettings } from '../services/storageService';
 import {
   fetchChatHistory,
   fetchRealtimeToken,
+  fetchSocialSession,
   fetchSocialState,
   markChatRead,
   sendChatMessage,
@@ -59,6 +60,7 @@ export default function FriendChatWindowApp() {
 
   const activeFriendIdRef = useRef(activeFriendId);
   activeFriendIdRef.current = activeFriendId;
+  const refreshSeqRef = useRef(0);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowTick(Date.now()), 30_000);
@@ -67,16 +69,32 @@ export default function FriendChatWindowApp() {
 
   const refreshSocial = useCallback(async (urlOverride = null) => {
     const targetUrl = urlOverride || effectiveSocialUrl;
+    const seq = ++refreshSeqRef.current;
     try {
+      const me = await fetchSocialSession(targetUrl);
+      if (seq !== refreshSeqRef.current) return;
+      if (!me?.authenticated) {
+        setSocial({
+          loading: false,
+          authenticated: false,
+          user: null,
+          friends: [],
+          unreadMessages: {}
+        });
+        return;
+      }
       const state = await fetchSocialState(targetUrl);
+      if (seq !== refreshSeqRef.current) return;
+      const resolvedUser = state?.user || me?.user || null;
       setSocial({
         loading: false,
-        authenticated: Boolean(state?.authenticated),
-        user: state?.user || null,
+        authenticated: Boolean(resolvedUser),
+        user: resolvedUser,
         friends: Array.isArray(state?.friends) ? state.friends : [],
         unreadMessages: state?.unreadMessages || {}
       });
     } catch {
+      if (seq !== refreshSeqRef.current) return;
       setSocial(prev => ({ ...prev, loading: false }));
     }
   }, [effectiveSocialUrl]);
@@ -252,6 +270,19 @@ export default function FriendChatWindowApp() {
     } catch {}
   };
 
+  const isTitlebarInteractive = target =>
+    Boolean(target?.closest?.('button, input, textarea, a, .steam-chat-tab'));
+
+  const handleTitlebarMouseDown = e => {
+    if (e.button !== 0 || e.detail >= 2 || isTitlebarInteractive(e.target)) return;
+    void window.estraWindow?.startDraggingFriendChatWindow?.().catch(() => {});
+  };
+
+  const handleTitlebarDoubleClick = e => {
+    if (isTitlebarInteractive(e.target)) return;
+    void window.estraWindow?.toggleMaximizeFriendChatWindow?.().catch(() => {});
+  };
+
   const query = search.trim().toLowerCase();
   const filteredFriends = (social.friends || [])
     .filter(f => !f.isDemo)
@@ -272,8 +303,12 @@ export default function FriendChatWindowApp() {
 
   return (
     <div className="steam-chat-window">
-      <header className="steam-chat-titlebar" data-tauri-drag-region>
-        <div className="steam-chat-brand" data-tauri-drag-region>
+      <header
+        className="steam-chat-titlebar"
+        onMouseDown={handleTitlebarMouseDown}
+        onDoubleClick={handleTitlebarDoubleClick}
+      >
+        <div className="steam-chat-brand">
           <button
             type="button"
             className="steam-chat-ctrl-btn"
@@ -283,7 +318,7 @@ export default function FriendChatWindowApp() {
           >
             {sidebarOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
           </button>
-          <span className="steam-chat-brand-label" data-tauri-drag-region>
+          <span className="steam-chat-brand-label">
             <MessageCircle size={13} /> ESTRA CHAT
           </span>
         </div>

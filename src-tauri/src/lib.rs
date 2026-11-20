@@ -134,6 +134,7 @@ fn ensure_friend_chat_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     .inner_size(820.0, 600.0)
     .min_inner_size(560.0, 440.0)
     .decorations(false)
+    .shadow(true)
     .resizable(true)
     .center()
     .visible(false)
@@ -501,6 +502,18 @@ fn minimize_friend_chat_window_cmd(webview: tauri::Webview, app: AppHandle) -> R
     crate::security::verify_social_ipc_caller(&webview)?;
     if let Some(win) = app.get_webview_window(FRIEND_CHAT_LABEL) {
         let _ = win.minimize();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn start_dragging_friend_chat_window_cmd(
+    webview: tauri::Webview,
+    app: AppHandle,
+) -> Result<(), String> {
+    crate::security::verify_social_ipc_caller(&webview)?;
+    if let Some(win) = app.get_webview_window(FRIEND_CHAT_LABEL) {
+        let _ = win.start_dragging();
     }
     Ok(())
 }
@@ -1228,6 +1241,7 @@ pub fn run() {
             drain_friend_chat_open_cmd,
             close_friend_chat_window_cmd,
             minimize_friend_chat_window_cmd,
+            start_dragging_friend_chat_window_cmd,
             toggle_maximize_friend_chat_window_cmd,
             set_friend_chat_always_on_top_cmd,
             notify_friend_chat_sync_cmd,

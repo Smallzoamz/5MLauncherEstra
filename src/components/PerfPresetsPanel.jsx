@@ -89,7 +89,7 @@ export default function PerfPresetsPanel({
           <span className="eyebrow">ADAPTIVE GAME PERFORMANCE PRESETS · 1-CLICK</span>
           <h3>ปรับกราฟิก FiveM / GTA V อัตโนมัติตามสเปกเครื่อง (3 พรีเซ็ต)</h3>
           <p className="help-text">
-            ลันเชอร์ตรวจจับการ์ดจอ VRAM, RAM และ CPU ของเครื่องคุณแล้วคำนวณ 3 พรีเซ็ตให้เหมาะกับกำลังเครื่องจริง โดยคงความละเอียดจอและโหมดหน้าจอเดิมไว้ 100% พร้อมสำรองค่าเดิมอัตโนมัติ
+            ลันเชอร์ตรวจจับการ์ดจอ VRAM, RAM และ CPU ของเครื่องคุณแล้วคำนวณ 3 พรีเซ็ตให้เหมาะกับกำลังเครื่องจริง โดยเขียนลงไฟล์กราฟิกจริงของ FiveM (<code>{perfState?.configSource || '%APPDATA%\\CitizenFX\\gta5_settings.xml'}</code>) คงความละเอียดจอและโหมดหน้าจอเดิมไว้ 100% พร้อมสำรองค่าเดิมอัตโนมัติ
           </p>
         </div>
         <div className="diag-header-actions">
@@ -161,8 +161,8 @@ export default function PerfPresetsPanel({
         <div className="diag-empty-box">
           <Gauge size={22} />
           <div>
-            <strong>ยังไม่พบไฟล์ Documents\Rockstar Games\GTA V\settings.xml</strong>
-            <p className="help-text">กรุณาเข้าเกม GTA V หรือ FiveM อย่างน้อย 1 ครั้งเพื่อให้เกมสร้างไฟล์ตั้งค่า แล้วกลับมากดรีเฟรช</p>
+            <strong>ยังไม่พบไฟล์ตั้งค่ากราฟิก FiveM (%APPDATA%\CitizenFX\gta5_settings.xml)</strong>
+            <p className="help-text">กรุณาเข้าเกม FiveM หรือ GTA V อย่างน้อย 1 ครั้งเพื่อให้เกมสร้างไฟล์ตั้งค่า แล้วกลับมากดรีเฟรช</p>
           </div>
         </div>
       ) : (

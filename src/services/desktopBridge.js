@@ -218,6 +218,7 @@ export function initDesktopBridge() {
     drainFriendChatOpen: () => invoke('drain_friend_chat_open_cmd'),
     closeFriendChatWindow: () => invoke('close_friend_chat_window_cmd'),
     minimizeFriendChatWindow: () => invoke('minimize_friend_chat_window_cmd'),
+    startDraggingFriendChatWindow: () => invoke('start_dragging_friend_chat_window_cmd'),
     toggleMaximizeFriendChatWindow: () => invoke('toggle_maximize_friend_chat_window_cmd'),
     setFriendChatAlwaysOnTop: pinned => invoke('set_friend_chat_always_on_top_cmd', { pinned: Boolean(pinned) }),
     notifyFriendChatSync: () => invoke('notify_friend_chat_sync_cmd'),

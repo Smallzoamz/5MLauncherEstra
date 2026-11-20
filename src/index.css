@@ -5520,6 +5520,9 @@ html.overlay-window-root #root {
   color: var(--accent-cyan);
   padding-right: 4px;
 }
+.steam-chat-brand-label svg {
+  pointer-events: none;
+}
 
 .steam-chat-tabs {
   display: flex;
