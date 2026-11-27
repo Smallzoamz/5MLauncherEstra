@@ -13,7 +13,10 @@ import {
   resolveSocialServerUrl
 } from '../src/shared/supabaseConfig.js';
 import { DEFAULT_SETTINGS } from '../src/services/storageService.js';
-import { validateAvatarUrl } from '../src/shared/profileAvatar.js';
+import {
+  resizeAvatarImageFileToDataUrl,
+  validateAvatarUrl
+} from '../src/shared/profileAvatar.js';
 import { resolveCommunityLinks, sanitizeExternalUrl } from '../src/shared/communityLinks.js';
 import { pruneChatMessages, loadCachedChat, saveCachedChat, clearUserChatCache } from '../src/services/chatCacheService.js';
 
@@ -615,4 +618,92 @@ test('socialStore.syncUserServers and /api/social/servers-sync persist per-user 
     body: JSON.stringify({ servers: tooMany, activeServerId: 's-0' })
   });
   assert.equal(overRes.status, 400);
+});
+
+test('desktop CSP allows blob: and data: in img-src and resizeAvatarImageFileToDataUrl handles decoding safely', async t => {
+  const tauriConf = JSON.parse(await fs.readFile(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'));
+  const tauriCsp = tauriConf?.app?.security?.csp || '';
+  assert.match(tauriCsp, /img-src[^;]*\bdata:/);
+  assert.match(tauriCsp, /img-src[^;]*\bblob:/);
+
+  const electronMain = await fs.readFile(new URL('../desktop/main.cjs', import.meta.url), 'utf8');
+  assert.match(electronMain, /img-src[^;"]*\bdata:/);
+  assert.match(electronMain, /img-src[^;"]*\bblob:/);
+
+  const origDoc = globalThis.document;
+  const origBitmap = globalThis.createImageBitmap;
+  const origFileReader = globalThis.FileReader;
+  const origImage = globalThis.Image;
+  t.after(() => {
+    globalThis.document = origDoc;
+    globalThis.createImageBitmap = origBitmap;
+    globalThis.FileReader = origFileReader;
+    globalThis.Image = origImage;
+  });
+
+  let drawCalls = 0;
+  let bitmapClosed = false;
+  globalThis.document = {
+    createElement(tag) {
+      assert.equal(tag, 'canvas');
+      return {
+        width: 0,
+        height: 0,
+        getContext() {
+          return {
+            clearRect() {},
+            drawImage() {
+              drawCalls += 1;
+            }
+          };
+        },
+        toDataURL(mime) {
+          return `data:${mime};base64,AAAA`;
+        }
+      };
+    }
+  };
+
+  // Primary path: createImageBitmap (no blob: URL needed) + empty MIME fallback for .webp
+  globalThis.createImageBitmap = async () => ({
+    width: 256,
+    height: 128,
+    close() {
+      bitmapClosed = true;
+    }
+  });
+  const webpResult = await resizeAvatarImageFileToDataUrl({ name: 'avatar.webp', type: '', size: 1024 });
+  assert.equal(webpResult, 'data:image/webp;base64,AAAA');
+  assert.equal(drawCalls, 1);
+  assert.equal(bitmapClosed, true);
+
+  // Fallback path: FileReader data URL when createImageBitmap is unavailable
+  globalThis.createImageBitmap = undefined;
+  globalThis.FileReader = class MockFileReader {
+    readAsDataURL() {
+      this.result = 'data:image/png;base64,BBBB';
+      this.onload?.();
+    }
+  };
+  globalThis.Image = class MockImage {
+    set src(val) {
+      assert.match(val, /^data:image\/png;base64,/);
+      this.naturalWidth = 128;
+      this.naturalHeight = 128;
+      this.onload?.();
+    }
+  };
+  const pngResult = await resizeAvatarImageFileToDataUrl({ name: 'avatar.png', type: 'image/png', size: 2048 });
+  assert.equal(pngResult, 'data:image/webp;base64,AAAA');
+  assert.equal(drawCalls, 2);
+
+  // Rejects SVG and oversized files
+  await assert.rejects(
+    () => resizeAvatarImageFileToDataUrl({ name: 'bad.svg', type: '', size: 100 }),
+    /ไม่รองรับไฟล์ SVG/
+  );
+  await assert.rejects(
+    () => resizeAvatarImageFileToDataUrl({ name: 'huge.png', type: 'image/png', size: 11 * 1024 * 1024 }),
+    /ไม่เกิน 10 MB/
+  );
 });

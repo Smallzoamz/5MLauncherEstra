@@ -67,7 +67,7 @@ if (!app.requestSingleInstanceLock()) {
         redirect: 'error', signal: request.signal
       });
       const outputHeaders = new Headers(response.headers);
-        outputHeaders.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https: http:; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-src 'none'");
+        outputHeaders.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https: http:; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-src 'none'");
       return new Response(response.body, { status: response.status, headers: outputHeaders });
     });
     const ses = session.defaultSession;
